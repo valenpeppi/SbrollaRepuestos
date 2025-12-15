@@ -151,7 +151,7 @@ class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
         self.db = BaseDeDatos()
-        self.title("Gestión de Repuestos - Sistema Profesional")
+        self.title("Gestión de Repuestos - Sistema de Cobranzas")
         self.geometry("1350x780")
         self.configure(bg=COLORS['light'])
         
