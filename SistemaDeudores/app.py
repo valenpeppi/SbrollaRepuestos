@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 import sqlite3
 from datetime import datetime
 import os 
+import sys 
 
 # ==========================================
 # CONFIGURACIÓN DE COLORES Y ESTILOS
@@ -151,9 +152,21 @@ class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
         self.db = BaseDeDatos()
-        self.title("Gestión de Repuestos - Sistema de Cobranzas")
+        self.title("Gestión de Repuestos - Sistema Profesional")
         self.geometry("1350x780")
         self.configure(bg=COLORS['light'])
+        
+        # Lógica de rutas para logo en .exe
+        if getattr(sys, 'frozen', False):
+            self.carpeta_base = os.path.dirname(sys.executable)
+        else:
+            self.carpeta_base = os.path.dirname(os.path.abspath(__file__))
+
+        ruta_icono = os.path.join(self.carpeta_base, "Logo_Sbrolla.ico")
+        if os.path.exists(ruta_icono):
+            try:
+                self.iconbitmap(ruta_icono)
+            except: pass
         
         self.cliente_seleccionado_id = None
         
@@ -166,7 +179,6 @@ class Aplicacion(tk.Tk):
         self.style = ttk.Style()
         self.style.theme_use("clam")
         
-        # Configurar Treeview (Tablas)
         self.style.configure("Treeview", 
                              background="white", 
                              foreground=COLORS['text'], 
@@ -238,7 +250,6 @@ class Aplicacion(tk.Tk):
         self.tree_clientes.bind("<<TreeviewSelect>>", self.seleccionar_cliente)
 
     def construir_panel_detalle(self, parent):
-        # 1. BOTONES DE ACCIÓN (AL FONDO)
         frame_acciones = tk.Frame(parent, bg=COLORS['light'], height=80)
         frame_acciones.pack(side="bottom", fill="x", padx=30, pady=20) 
 
@@ -257,22 +268,19 @@ class Aplicacion(tk.Tk):
                               command=self.abrir_ventana_pago)
         btn_pagar.pack(side="right")
 
-        # 2. ENCABEZADO (ARRIBA)
         frame_encabezado = tk.Frame(parent, bg=COLORS['light'])
         frame_encabezado.pack(side="top", pady=15, fill="x", padx=30) 
 
-        # Logo
-        carpeta_actual = os.path.dirname(os.path.abspath(__file__))
-        ruta_completa_imagen = os.path.join(carpeta_actual, "Logo_Sbrolla.png")
+        ruta_completa_imagen = os.path.join(self.carpeta_base, "Logo_Sbrolla.png")
         if os.path.exists(ruta_completa_imagen):
             try:
                 self.img_logo = tk.PhotoImage(file=ruta_completa_imagen)
                 self.img_logo = self.img_logo.subsample(4, 4) 
                 lbl_img = tk.Label(frame_encabezado, image=self.img_logo, bg=COLORS['light'])
                 lbl_img.pack(side="left", padx=(0, 15)) 
-            except: pass
+            except Exception as e:
+                pass
 
-        # ETIQUETA CLIENTE
         self.lbl_cliente_nombre = tk.Label(frame_encabezado, 
                                            text="Seleccione un cliente...", 
                                            font=('Segoe UI', 22, 'bold'), 
@@ -281,11 +289,9 @@ class Aplicacion(tk.Tk):
                                            padx=20, pady=10)     
         self.lbl_cliente_nombre.pack(side="left", expand=True, fill="x")
 
-        # 3. TOTAL
         self.lbl_cliente_total = tk.Label(parent, text="", font=('Segoe UI', 24, 'bold'), fg=COLORS['danger'], bg=COLORS['light'])
         self.lbl_cliente_total.pack(side="top", pady=5)
 
-        # 4. HEADER Y PANEL DE CARGA
         frame_title_add = tk.Frame(parent, bg=COLORS['light'])
         frame_title_add.pack(side="top", fill="x", padx=30, pady=(15, 0))
         tk.Label(frame_title_add, text="Agendar nueva deuda", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(side="left")
@@ -298,38 +304,31 @@ class Aplicacion(tk.Tk):
         frame_add.columnconfigure(5, weight=1)
         frame_add.columnconfigure(6, weight=10) 
 
-        # --- CAMBIO: CAJA DE TEXTO SIMPLE ---
         tk.Label(frame_add, text="Concepto / Repuesto:", bg="white", font=FONTS['body']).grid(row=0, column=0, sticky="w")
         
         self.entry_desc = tk.Entry(frame_add, width=25, font=FONTS['body'], bg="white", relief="solid", bd=1)
         self.entry_desc.grid(row=0, column=1, sticky="ew", padx=(5, 15), ipady=5)
-        self.entry_desc.insert(0, "Factura") # Pre-llenar con "Factura"
+        self.entry_desc.insert(0, "Factura")
 
         tk.Label(frame_add, text="Monto ($):", bg="white", font=FONTS['body']).grid(row=0, column=2, sticky="w")
         self.entry_monto = tk.Entry(frame_add, width=10, font=FONTS['body'], bg="white", relief="solid", bd=1)
         self.entry_monto.grid(row=0, column=3, sticky="ew", padx=(5, 15), ipady=5)
 
-        # --- SECCION FECHA CON 3 BOXES ---
         frame_fecha = tk.Frame(frame_add, bg="white")
         frame_fecha.grid(row=0, column=4, columnspan=2, sticky="w")
         
         tk.Label(frame_fecha, text="Fecha:", bg="white", font=FONTS['body']).pack(side="left", padx=(0,5))
         
-        # Box DIA
         self.entry_dia = tk.Entry(frame_fecha, width=3, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
         self.entry_dia.pack(side="left", ipady=5)
         tk.Label(frame_fecha, text="/", bg="white", font=FONTS['body_bold']).pack(side="left", padx=2)
         
-        # Box MES
         self.entry_mes = tk.Entry(frame_fecha, width=3, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
         self.entry_mes.pack(side="left", ipady=5)
         tk.Label(frame_fecha, text="/", bg="white", font=FONTS['body_bold']).pack(side="left", padx=2)
         
-        # Box AÑO
         self.entry_anio = tk.Entry(frame_fecha, width=5, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
         self.entry_anio.pack(side="left", ipady=5)
-
-        # SE INICIAN VACÍAS POR DEFECTO
 
         btn_add_deuda = tk.Button(frame_add, text="AGREGAR", 
                                   bg=COLORS['warning'], fg="white", 
@@ -339,7 +338,6 @@ class Aplicacion(tk.Tk):
                                   command=self.guardar_nueva_deuda)
         btn_add_deuda.grid(row=0, column=7, padx=10, sticky="e")
         
-        # 5. FILTROS Y TABLA
         frame_head = tk.Frame(parent, bg=COLORS['light'])
         frame_head.pack(side="top", fill="x", padx=30, pady=(20, 5))
         
@@ -376,7 +374,6 @@ class Aplicacion(tk.Tk):
         
         self.tree_detalle.pack(side="left", fill="both", expand=True)
 
-        # Eventos Tooltip
         self.tree_detalle.bind("<Motion>", self.verificar_tooltip)
         self.tree_detalle.bind("<Leave>", self.ocultar_tooltip)
 
@@ -394,9 +391,9 @@ class Aplicacion(tk.Tk):
                         
                         texto = ""
                         if col_id == "#1":
-                            texto = item['values'][0] # Concepto
+                            texto = item['values'][0] 
                         elif col_id == "#8":
-                            texto = item['values'][7] # Método 
+                            texto = item['values'][7] 
 
                         if (row_id != self.last_tooltip_row) or (col_id != self.last_tooltip_col):
                             self.mostrar_tooltip(texto, event.x_root, event.y_root)
@@ -437,7 +434,15 @@ class Aplicacion(tk.Tk):
         tk.Label(top, text="Registrar Nuevo Cliente", font=FONTS['h2'], bg="white", fg=COLORS['primary']).pack(pady=15)
 
         tk.Label(top, text="DNI / Código Único:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
-        e_dni = tk.Entry(top, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        
+        # --- VALIDACIÓN DE SOLO NÚMEROS ---
+        def validar_solo_numeros(text):
+            return text.isdigit() or text == ""
+        
+        vcmd = (top.register(validar_solo_numeros), '%P')
+        
+        e_dni = tk.Entry(top, font=FONTS['body'], bg="white", relief="solid", bd=1, 
+                         validate='key', validatecommand=vcmd)
         e_dni.pack(fill="x", padx=30, pady=(0, 10), ipady=3)
         e_dni.focus()
 
@@ -532,7 +537,6 @@ class Aplicacion(tk.Tk):
         monto_txt = self.entry_monto.get()
         desc = self.entry_desc.get()
         
-        # --- NUEVA LOGICA DE FECHA DESDE 3 BOXES ---
         dia = self.entry_dia.get().strip()
         mes = self.entry_mes.get().strip()
         anio = self.entry_anio.get().strip()
@@ -563,7 +567,6 @@ class Aplicacion(tk.Tk):
             self.entry_desc.delete(0, tk.END)
             self.entry_desc.insert(0, "Factura") # RESETEA A "Factura"
             
-            # Limpiar campos de fecha
             self.entry_dia.delete(0, tk.END)
             self.entry_mes.delete(0, tk.END)
             self.entry_anio.delete(0, tk.END)
@@ -614,10 +617,9 @@ class Aplicacion(tk.Tk):
             messagebox.showinfo("Bien", "Esta deuda ya está pagada.")
             return
 
-        # POPUP PAGO AGREGADO (Más alto para que entre el botón)
         popup = tk.Toplevel(self)
         popup.title("Ingresar Pago")
-        popup.geometry("450x650") # Agrandado de 600 a 650
+        popup.geometry("450x650") 
         popup.configure(bg="white")
         
         tk.Label(popup, text="Registrar Pago", font=FONTS['h2'], bg="white", fg=COLORS['secondary']).pack(pady=(20, 5))
@@ -669,7 +671,6 @@ class Aplicacion(tk.Tk):
         c_metodo.current(0)
         c_metodo.pack(fill="x", padx=30, pady=5)
 
-        # CAMPO OBSERVACIONES
         tk.Label(popup, text="Observaciones (Nro Cheque / Nota):", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30, pady=(10,0))
         e_obs = tk.Entry(popup, font=FONTS['body'], bg="white", relief="solid", bd=1)
         e_obs.pack(fill="x", padx=30, pady=5, ipady=3)
@@ -679,7 +680,6 @@ class Aplicacion(tk.Tk):
                 monto = float(e_pago.get())
                 if monto <= 0: return
                 
-                # Construir string del método
                 metodo_final = c_metodo.get()
                 obs = e_obs.get().strip()
                 if obs:
@@ -691,9 +691,8 @@ class Aplicacion(tk.Tk):
                 popup.destroy()
             except: messagebox.showerror("Error", "Monto inválido")
 
-        # BOTÓN PAGO ARREGLADO (Más espacio y estilo limpio)
         frame_btn_pago = tk.Frame(popup, bg="white")
-        frame_btn_pago.pack(fill="x", pady=20, side="bottom") # Side bottom para que quede abajo
+        frame_btn_pago.pack(fill="x", pady=20, side="bottom") 
         
         tk.Button(frame_btn_pago, text="CONFIRMAR PAGO", bg=COLORS['success'], fg="white", 
                   font=FONTS['body_bold'], relief="raised", bd=2,
