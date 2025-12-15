@@ -4,6 +4,30 @@ import sqlite3
 from datetime import datetime
 import os 
 
+# ==========================================
+# CONFIGURACIÓN DE COLORES Y ESTILOS
+# ==========================================
+COLORS = {
+    'primary': '#2980b9',       # Azul fuerte
+    'secondary': '#2c3e50',     # Gris oscuro (Sidebar)
+    'success': '#27ae60',       # Verde (Pagos/Guardar)
+    'warning': '#f39c12',       # Naranja (Agregar Deuda)
+    'danger': '#c0392b',        # Rojo (Eliminar)
+    'light': '#ecf0f1',         # Gris muy claro (Fondos)
+    'white': '#ffffff',
+    'text': '#2c3e50',
+    'text_light': '#ecf0f1',    # Texto claro sobre fondo oscuro
+    'input_border': '#bdc3c7'   # Gris borde inputs
+}
+
+FONTS = {
+    'h1': ('Segoe UI', 18, 'bold'),
+    'h2': ('Segoe UI', 14, 'bold'),
+    'body': ('Segoe UI', 10),
+    'body_bold': ('Segoe UI', 10, 'bold'),
+    'small': ('Segoe UI', 8)
+}
+
 # --- PARTE 1: LA BASE DE DATOS ---
 class BaseDeDatos:
     def __init__(self, db_name="taller_repuestos_final.db"):
@@ -37,14 +61,12 @@ class BaseDeDatos:
         """)
         self.conn.commit()
 
-    # --- NUEVA FUNCION PARA VALIDAR ID UNICO ---
     def existe_cliente(self, dni):
         self.cursor.execute("SELECT id FROM clientes WHERE dni = ?", (dni,))
         row = self.cursor.fetchone()
         return row is not None
 
     def agregar_cliente(self, dni, nombre, localidad):
-        # Pasamos un string vacio "" en telefono para mantener la estructura de la tabla
         self.cursor.execute("INSERT INTO clientes (dni, nombre, telefono, localidad) VALUES (?, ?, ?, ?)", 
                             (dni, nombre, "", localidad))
         self.conn.commit()
@@ -121,25 +143,43 @@ class BaseDeDatos:
         self.cursor.execute("DELETE FROM deudas WHERE id = ?", (deuda_id,))
         self.conn.commit()
 
-# --- PARTE 2: INTERFAZ GRÁFICA ---
+# --- PARTE 2: INTERFAZ GRÁFICA MEJORADA ---
 class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
         self.db = BaseDeDatos()
-        self.title("Gestión de Repuestos - Sistema Completo")
-        self.geometry("1300x750")
+        self.title("Gestión de Repuestos - Sistema Profesional")
+        self.geometry("1350x780")
+        self.configure(bg=COLORS['light'])
         
         self.cliente_seleccionado_id = None
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview", font=('Arial', 10), rowheight=28)
-        style.configure("Treeview.Heading", font=('Arial', 10, 'bold'))
+        # --- ESTILOS TTK ---
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        
+        # Configurar Treeview (Tablas)
+        self.style.configure("Treeview", 
+                             background="white", 
+                             foreground=COLORS['text'], 
+                             fieldbackground="white",
+                             font=FONTS['body'],
+                             rowheight=30)
+        
+        self.style.configure("Treeview.Heading", 
+                             font=FONTS['body_bold'], 
+                             background=COLORS['light'], 
+                             foreground=COLORS['text'])
+        
+        self.style.map('Treeview', background=[('selected', COLORS['primary'])])
 
-        panel_izquierdo = tk.Frame(self, width=400, bg="#e0e0e0")
+        # Layout Principal
+        # Panel Izquierdo (Sidebar)
+        panel_izquierdo = tk.Frame(self, width=380, bg=COLORS['secondary'])
         panel_izquierdo.pack(side="left", fill="both", expand=False)
         
-        self.panel_derecho = tk.Frame(self, bg="white")
+        # Panel Derecho (Contenido)
+        self.panel_derecho = tk.Frame(self, bg=COLORS['light'])
         self.panel_derecho.pack(side="right", fill="both", expand=True)
 
         self.construir_panel_clientes(panel_izquierdo)
@@ -148,24 +188,34 @@ class Aplicacion(tk.Tk):
         self.cargar_lista_clientes()
 
     def construir_panel_clientes(self, parent):
-        tk.Label(parent, text="📂 CLIENTES", font=("Arial", 14, "bold"), bg="#e0e0e0").pack(pady=(20, 10))
+        # Título
+        tk.Label(parent, text="📂 LISTA DE CLIENTES", font=FONTS['h2'], 
+                 bg=COLORS['secondary'], fg=COLORS['text_light']).pack(pady=(25, 15))
         
-        # --- CAMBIO: BOTON NUEVO CLIENTE ARRIBA Y MAS GRANDE ---
-        btn_nuevo = tk.Button(parent, text="+ NUEVO CLIENTE", bg="#2196F3", fg="white", 
-                              font=("Arial", 12, "bold"), command=self.modal_nuevo_cliente)
-        btn_nuevo.pack(fill="x", padx=15, pady=10, ipady=8) # ipady agranda la altura interna
+        # Botón Nuevo Cliente
+        btn_nuevo = tk.Button(parent, text="+ NUEVO CLIENTE", 
+                              bg=COLORS['success'], fg='white', 
+                              font=FONTS['body_bold'], 
+                              relief="flat", cursor="hand2",
+                              command=self.modal_nuevo_cliente)
+        btn_nuevo.pack(fill="x", padx=20, pady=10, ipady=10)
 
-        frame_search = tk.Frame(parent, bg="#e0e0e0")
-        frame_search.pack(fill="x", padx=10)
-        tk.Label(frame_search, text="Buscar (Nom/DNI/Loc):", bg="#e0e0e0").pack(side="left")
-        self.entry_buscar = tk.Entry(frame_search)
-        self.entry_buscar.pack(side="left", fill="x", expand=True, padx=5)
+        # Buscador
+        frame_search = tk.Frame(parent, bg=COLORS['secondary'])
+        frame_search.pack(fill="x", padx=20, pady=5)
+        
+        tk.Label(frame_search, text="🔍 Buscar:", bg=COLORS['secondary'], fg="#bdc3c7", font=FONTS['small']).pack(anchor="w")
+        
+        # Input con borde simple para que se note
+        self.entry_buscar = tk.Entry(frame_search, font=FONTS['body'], relief="solid", bd=1, bg="white")
+        self.entry_buscar.pack(fill="x", ipady=5) 
         self.entry_buscar.bind("<KeyRelease>", self.filtrar_clientes)
 
-        frame_tabla = tk.Frame(parent)
-        frame_tabla.pack(fill="both", expand=True, padx=10, pady=5)
+        # Tabla Clientes
+        frame_tabla = tk.Frame(parent, bg=COLORS['secondary'])
+        frame_tabla.pack(fill="both", expand=True, padx=20, pady=15)
 
-        scrollbar = tk.Scrollbar(frame_tabla)
+        scrollbar = ttk.Scrollbar(frame_tabla)
         scrollbar.pack(side="right", fill="y")
 
         columns = ("DNI", "Nombre", "Loc", "Saldo")
@@ -173,176 +223,176 @@ class Aplicacion(tk.Tk):
         
         scrollbar.config(command=self.tree_clientes.yview)
 
-        self.tree_clientes.heading("DNI", text="DNI / Cód")
+        self.tree_clientes.heading("DNI", text="DNI / ID")
         self.tree_clientes.heading("Nombre", text="Nombre")
         self.tree_clientes.heading("Loc", text="Loc")
         self.tree_clientes.heading("Saldo", text="Debe ($)")
         
-        self.tree_clientes.column("DNI", width=80)
-        self.tree_clientes.column("Nombre", width=140)
-        self.tree_clientes.column("Loc", width=80)
+        self.tree_clientes.column("DNI", width=70)
+        self.tree_clientes.column("Nombre", width=130)
+        self.tree_clientes.column("Loc", width=70)
         self.tree_clientes.column("Saldo", width=80)
         
         self.tree_clientes.pack(side="left", fill="both", expand=True)
         self.tree_clientes.bind("<<TreeviewSelect>>", self.seleccionar_cliente)
 
     def construir_panel_detalle(self, parent):
-        frame_encabezado = tk.Frame(parent, bg="white")
-        frame_encabezado.pack(pady=10, fill="x", padx=20) 
+        # 1. BOTONES DE ACCIÓN (AL FONDO)
+        frame_acciones = tk.Frame(parent, bg=COLORS['light'], height=80)
+        frame_acciones.pack(side="bottom", fill="x", padx=30, pady=20) 
 
+        btn_eliminar = tk.Button(frame_acciones, text="🗑️ Eliminar Registro", 
+                                 bg="#95a5a6", fg="white", 
+                                 font=FONTS['body_bold'], relief="flat", cursor="hand2",
+                                 padx=15, pady=8,
+                                 command=self.eliminar_error)
+        btn_eliminar.pack(side="left") 
+
+        btn_pagar = tk.Button(frame_acciones, text="💵  INGRESAR PAGO", 
+                              bg=COLORS['success'], fg="white", 
+                              font=('Segoe UI', 12, 'bold'), 
+                              relief="flat", cursor="hand2",
+                              padx=30, pady=10, 
+                              command=self.abrir_ventana_pago)
+        btn_pagar.pack(side="right")
+
+        # 2. ENCABEZADO (ARRIBA)
+        frame_encabezado = tk.Frame(parent, bg=COLORS['light'])
+        frame_encabezado.pack(side="top", pady=15, fill="x", padx=30) 
+
+        # Intento de cargar logo (opcional)
         carpeta_actual = os.path.dirname(os.path.abspath(__file__))
         ruta_completa_imagen = os.path.join(carpeta_actual, "Logo_Sbrolla.png")
-        
         if os.path.exists(ruta_completa_imagen):
             try:
                 self.img_logo = tk.PhotoImage(file=ruta_completa_imagen)
                 self.img_logo = self.img_logo.subsample(4, 4) 
-                lbl_img = tk.Label(frame_encabezado, image=self.img_logo, bg="white")
-                lbl_img.pack(side="left") 
-            except Exception as e:
-                print(f"Error cargando imagen: {e}")
+                lbl_img = tk.Label(frame_encabezado, image=self.img_logo, bg=COLORS['light'])
+                lbl_img.pack(side="left", padx=(0, 15)) 
+            except: pass
 
-        self.lbl_cliente_nombre = tk.Label(frame_encabezado, text="Seleccione un cliente", font=("Arial", 22, "bold"), bg="white", fg="#333")
+        self.lbl_cliente_nombre = tk.Label(frame_encabezado, text="Seleccione un cliente...", 
+                                           font=FONTS['h1'], bg=COLORS['light'], fg=COLORS['text'])
         self.lbl_cliente_nombre.pack(side="left", expand=True, fill="x")
 
-        self.lbl_cliente_total = tk.Label(parent, text="", font=("Arial", 16, "bold"), fg="#d32f2f", bg="white")
-        self.lbl_cliente_total.pack(pady=5)
+        # 3. TOTAL (ARRIBA)
+        self.lbl_cliente_total = tk.Label(parent, text="", font=('Segoe UI', 24, 'bold'), fg=COLORS['danger'], bg=COLORS['light'])
+        self.lbl_cliente_total.pack(side="top", pady=5)
 
-        # ============================================================
-        # REFACTORIZACIÓN DEL PANEL DE CARGA
-        # ============================================================
-        frame_add = tk.LabelFrame(parent, text="Cargar Nueva Deuda", bg="white", 
-                                  padx=15, pady=15, font=("Arial", 11, "bold"), fg="#d32f2f")
-        frame_add.pack(fill="x", padx=20, pady=10)
+        # =========================================================
+        # NUEVO HEADER Y PANEL DE CARGA (MODIFICADO)
+        # =========================================================
+        
+        # TÍTULO ESTILO "HISTORIAL"
+        frame_title_add = tk.Frame(parent, bg=COLORS['light'])
+        frame_title_add.pack(side="top", fill="x", padx=30, pady=(15, 0))
+        tk.Label(frame_title_add, text="Agendar nueva deuda", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(side="left")
 
-        # Configuración de columnas para Grid:
-        # Col 0, 2, 4 son etiquetas (tamaño fijo)
-        # Col 1, 3, 5 son inputs (se adaptan)
-        # Col 6 es un ESPACIO VACÍO que se estira (weight=1) para empujar el botón
-        # Col 7 es el botón
-        frame_add.columnconfigure(1, weight=2) # El repuesto tiene más espacio
+        # CONTENEDOR DE INPUTS (Sin título embebido, para limpieza visual)
+        frame_add = tk.Frame(parent, bg="white", padx=20, pady=20, relief="solid", bd=1)
+        frame_add.pack(side="top", fill="x", padx=30, pady=(5, 10))
+
+        # Configuración de grid
+        frame_add.columnconfigure(1, weight=2) 
         frame_add.columnconfigure(3, weight=1)
         frame_add.columnconfigure(5, weight=1)
-        frame_add.columnconfigure(6, weight=10) # GRAN ESPACIO SEPARADOR
+        frame_add.columnconfigure(6, weight=10) # Espaciador
 
-        # --- INPUTS ---
+        # Inputs con BORDES
         # 1. Repuesto
-        tk.Label(frame_add, text="Repuesto:", bg="white").grid(row=0, column=0, sticky="w")
-        self.entry_desc = tk.Entry(frame_add, width=25)
-        self.entry_desc.grid(row=0, column=1, sticky="ew", padx=(5, 15))
+        tk.Label(frame_add, text="Concepto / Repuesto:", bg="white", font=FONTS['body']).grid(row=0, column=0, sticky="w")
+        self.entry_desc = tk.Entry(frame_add, width=25, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        self.entry_desc.grid(row=0, column=1, sticky="ew", padx=(5, 15), ipady=5)
 
         # 2. Monto
-        tk.Label(frame_add, text="Monto ($):", bg="white").grid(row=0, column=2, sticky="w")
-        self.entry_monto = tk.Entry(frame_add, width=10)
-        self.entry_monto.grid(row=0, column=3, sticky="ew", padx=(5, 15))
+        tk.Label(frame_add, text="Monto ($):", bg="white", font=FONTS['body']).grid(row=0, column=2, sticky="w")
+        self.entry_monto = tk.Entry(frame_add, width=10, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        self.entry_monto.grid(row=0, column=3, sticky="ew", padx=(5, 15), ipady=5)
 
-        # 3. Fecha (Con sub-texto para que quede prolijo)
+        # 3. Fecha
         frame_fecha = tk.Frame(frame_add, bg="white")
         frame_fecha.grid(row=0, column=4, columnspan=2, sticky="w")
         
-        tk.Label(frame_fecha, text="Fecha:", bg="white").pack(side="left")
-        self.entry_fecha = tk.Entry(frame_fecha, width=12)
-        self.entry_fecha.pack(side="left", padx=5)
-        tk.Label(frame_fecha, text="(dd/mm/aaaa)", font=("Arial", 7), fg="gray", bg="white").pack(side="left")
+        tk.Label(frame_fecha, text="Fecha:", bg="white", font=FONTS['body']).pack(side="left")
+        self.entry_fecha = tk.Entry(frame_fecha, width=12, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        self.entry_fecha.pack(side="left", padx=5, ipady=5)
+        tk.Label(frame_fecha, text="(dd/mm/aaaa)", font=FONTS['small'], fg="gray", bg="white").pack(side="left")
 
-        # --- BOTÓN AGREGAR (SOLO A LA DERECHA) ---
-        # Height=2 le da altura de dos líneas de texto, haciéndolo ver "grande" y cuadrado.
-        btn_add_deuda = tk.Button(frame_add, text="AGREGAR", bg="#FF9800", fg="black", 
-                                  font=("Arial", 10, "bold"), 
-                                  cursor="hand2", relief="raised", borderwidth=2,
-                                  width=15, height=2,  # TAMAÑO FORZADO
+        # BOTÓN AGREGAR
+        btn_add_deuda = tk.Button(frame_add, text="AGREGAR", 
+                                  bg=COLORS['warning'], fg="white", 
+                                  font=FONTS['body_bold'], 
+                                  cursor="hand2", relief="flat",
+                                  width=15, height=1,
                                   command=self.guardar_nueva_deuda)
-        
-        # Lo ponemos en la columna 7. Gracias a la columna 6 vacía, esto se va al fondo a la derecha.
         btn_add_deuda.grid(row=0, column=7, padx=10, sticky="e")
         
-        # ============================================================
-        # FIN REFACTORIZACIÓN
-        # ============================================================
-
-        frame_head = tk.Frame(parent, bg="white")
-        frame_head.pack(fill="x", padx=20, pady=(10, 0))
+        # 5. FILTROS Y TABLA
+        frame_head = tk.Frame(parent, bg=COLORS['light'])
+        frame_head.pack(side="top", fill="x", padx=30, pady=(20, 5))
         
-        tk.Label(frame_head, text="Historial de Cuenta Corriente:", bg="white", font=("Arial", 10)).pack(side="left")
+        # Header Historial
+        tk.Label(frame_head, text="Historial de Movimientos", bg=COLORS['light'], font=FONTS['h2'], fg=COLORS['text']).pack(side="left")
         
-        frame_filtro_container = tk.Frame(frame_head, bg="white")
-        frame_filtro_container.pack(side="right")
-
-        tk.Label(frame_filtro_container, text="Ordenar por:", bg="white", font=("Arial", 9)).pack(side="left", padx=5)
-        self.combo_filtro = ttk.Combobox(frame_filtro_container, values=["Más Recientes", "Más Antiguas", "Por Estado (Pendientes primero)"], state="readonly", width=25)
+        self.combo_filtro = ttk.Combobox(frame_head, values=["Más Recientes", "Más Antiguas", "Por Estado"], state="readonly", width=20)
         self.combo_filtro.current(0)
-        self.combo_filtro.pack(side="left")
+        self.combo_filtro.pack(side="right")
         self.combo_filtro.bind("<<ComboboxSelected>>", self.aplicar_filtro)
+        tk.Label(frame_head, text="Ordenar:", bg=COLORS['light'], font=FONTS['small']).pack(side="right", padx=5)
 
-        frame_tabla = tk.Frame(parent, bg="white")
-        frame_tabla.pack(fill="both", expand=True, padx=20, pady=5)
+        # Tabla Detalle
+        frame_tabla_det = tk.Frame(parent, bg="white")
+        frame_tabla_det.pack(side="top", fill="both", expand=True, padx=30, pady=5)
 
-        scrollbar = tk.Scrollbar(frame_tabla)
-        scrollbar.pack(side="right", fill="y")
+        scrollbar_d = ttk.Scrollbar(frame_tabla_det)
+        scrollbar_d.pack(side="right", fill="y")
 
-        columns = ("Desc", "Original", "Pagado", "Resta", "Fecha Ingreso", "Ultimo Pago", "Estado", "Metodo")
-        self.tree_detalle = ttk.Treeview(frame_tabla, columns=columns, show="headings", yscrollcommand=scrollbar.set)
-        scrollbar.config(command=self.tree_detalle.yview)
+        cols_d = ("Desc", "Original", "Pagado", "Resta", "Fecha Ingreso", "Ultimo Pago", "Estado", "Metodo")
+        self.tree_detalle = ttk.Treeview(frame_tabla_det, columns=cols_d, show="headings", yscrollcommand=scrollbar_d.set)
+        scrollbar_d.config(command=self.tree_detalle.yview)
 
-        self.tree_detalle.heading("Desc", text="Repuesto / Nota")
-        self.tree_detalle.heading("Original", text="Original ($)")
-        self.tree_detalle.heading("Pagado", text="Pagado ($)")
-        self.tree_detalle.heading("Resta", text="Falta ($)")
-        self.tree_detalle.heading("Fecha Ingreso", text="Fecha Fiao'")
-        self.tree_detalle.heading("Ultimo Pago", text="Fecha Pago")
-        self.tree_detalle.heading("Estado", text="Estado")
-        self.tree_detalle.heading("Metodo", text="Forma Pago")
+        # Configurar columnas
+        headers = ["Concepto", "Original ($)", "Pagado ($)", "Debe ($)", "Fecha Creación", "Fecha Pago", "Estado", "Método"]
+        widths = [200, 80, 80, 80, 100, 100, 80, 80]
         
-        self.tree_detalle.column("Desc", width=180)
-        self.tree_detalle.column("Original", width=70)
-        self.tree_detalle.column("Pagado", width=70)
-        self.tree_detalle.column("Resta", width=70)
-        self.tree_detalle.column("Fecha Ingreso", width=110)
-        self.tree_detalle.column("Ultimo Pago", width=110)
-        self.tree_detalle.column("Estado", width=80)
-        self.tree_detalle.column("Metodo", width=90)
+        for i, col in enumerate(cols_d):
+            self.tree_detalle.heading(col, text=headers[i])
+            self.tree_detalle.column(col, width=widths[i], anchor="center")
         
-        self.tree_detalle.tag_configure('PENDIENTE', background='#ffcccc') 
-        self.tree_detalle.tag_configure('PARCIAL', background='#fff4e5')   
-        self.tree_detalle.tag_configure('PAGADA', background='#d4edda')    
+        self.tree_detalle.column("Desc", anchor="w") 
+
+        # Colores de filas (Tags)
+        self.tree_detalle.tag_configure('PENDIENTE', background='#ffebee', foreground=COLORS['danger']) 
+        self.tree_detalle.tag_configure('PARCIAL', background='#fff3e0', foreground=COLORS['text'])    
+        self.tree_detalle.tag_configure('PAGADA', background='#e8f5e9', foreground=COLORS['success'])  
         
         self.tree_detalle.pack(side="left", fill="both", expand=True)
 
-        frame_acciones = tk.Frame(parent, bg="white")
-        frame_acciones.pack(fill="x", padx=20, pady=15) 
 
-        btn_pagar = tk.Button(frame_acciones, text="💵 INGRESAR PAGO", bg="#4CAF50", fg="white", 
-                              font=("Arial", 12, "bold"), padx=20, pady=10, 
-                              command=self.abrir_ventana_pago)
-        btn_pagar.pack(side="right", padx=10)
-
-        btn_eliminar = tk.Button(frame_acciones, text="🗑️ Eliminar Registro", bg="#757575", fg="white", 
-                                 font=("Arial", 10, "bold"), padx=15, pady=8,
-                                 command=self.eliminar_error)
-        btn_eliminar.pack(side="right", padx=10)
-    # --- LÓGICA ---
+    # --- LÓGICA (Misma funcionalidad) ---
     def modal_nuevo_cliente(self):
         top = tk.Toplevel(self)
         top.title("Nuevo Cliente")
-        top.geometry("350x250") # Achiqué un poco la ventana ya que saqué telefono
+        top.geometry("400x320")
+        top.configure(bg="white")
         
-        tk.Label(top, text="DNI / Código (Debe ser ÚNICO):").pack(pady=5)
-        e_dni = tk.Entry(top)
-        e_dni.pack(pady=5)
+        tk.Label(top, text="Registrar Nuevo Cliente", font=FONTS['h2'], bg="white", fg=COLORS['primary']).pack(pady=15)
+
+        tk.Label(top, text="DNI / Código Único:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
+        e_dni = tk.Entry(top, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        e_dni.pack(fill="x", padx=30, pady=(0, 10), ipady=3)
         e_dni.focus()
 
-        tk.Label(top, text="Nombre y Apellido:").pack(pady=5)
-        e_nombre = tk.Entry(top)
-        e_nombre.pack(pady=5)
+        tk.Label(top, text="Nombre Completo:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
+        e_nombre = tk.Entry(top, font=FONTS['body'], bg="white", relief="solid", bd=1)
+        e_nombre.pack(fill="x", padx=30, pady=(0, 10), ipady=3)
         
-        tk.Label(top, text="Localidad:").pack(pady=5)
+        tk.Label(top, text="Localidad:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
         valores_loc = ["Bombal", "Bigand", "Firmat", "Alcorta", "Rosario", "Venado Tuerto", "Otro"]
-        e_localidad = ttk.Combobox(top, values=valores_loc, state="readonly")
-        e_localidad.pack(pady=5)
+        e_localidad = ttk.Combobox(top, values=valores_loc, state="readonly", font=FONTS['body'])
+        e_localidad.pack(fill="x", padx=30, pady=(0, 20), ipady=3)
         e_localidad.current(0)
 
-        # --- SE QUITÓ EL CAMPO TELEFONO ---
-        
         def guardar():
             dni = e_dni.get().strip()
             nombre = e_nombre.get().strip()
@@ -351,16 +401,17 @@ class Aplicacion(tk.Tk):
                 messagebox.showwarning("Faltan datos", "El DNI/Código y el Nombre son obligatorios")
                 return
 
-            # --- VALIDACIÓN DE ID ÚNICO ---
             if self.db.existe_cliente(dni):
-                messagebox.showerror("Error", f"Ya existe un cliente con el ID/DNI '{dni}'.\nPor favor use otro.")
+                messagebox.showerror("Error", f"Ya existe un cliente con el ID/DNI '{dni}'.")
                 return
 
             self.db.agregar_cliente(dni, nombre, e_localidad.get())
             self.cargar_lista_clientes()
             top.destroy()
         
-        tk.Button(top, text="GUARDAR", bg="#2196F3", fg="white", command=guardar).pack(pady=20)
+        tk.Button(top, text="GUARDAR CLIENTE", bg=COLORS['primary'], fg="white", 
+                  font=FONTS['body_bold'], relief="flat", cursor="hand2",
+                  command=guardar).pack(pady=10, ipadx=20, ipady=5)
         top.bind('<Return>', lambda event: guardar())
 
     def cargar_lista_clientes(self, filtro=""):
@@ -400,7 +451,7 @@ class Aplicacion(tk.Tk):
             historial.sort(key=lambda x: x[0], reverse=True)
         elif filtro_actual == "Más Antiguas":
             historial.sort(key=lambda x: x[0], reverse=False)
-        elif filtro_actual == "Por Estado (Pendientes primero)":
+        elif filtro_actual == "Por Estado":
             peso_estado = {'PENDIENTE': 0, 'PARCIAL': 1, 'PAGADA': 2}
             historial.sort(key=lambda x: peso_estado.get(x[7], 99))
 
@@ -409,11 +460,11 @@ class Aplicacion(tk.Tk):
             f_pago = h[6] if h[6] else "-"
             metodo = h[8] if h[8] else "-"
             
-            valores_fila = (h[1], f"${h[2]}", f"${h[3]}", f"${h[4]}", f_creacion, f_pago, h[7], metodo)
+            valores_fila = (h[1], f"${h[2]:,.2f}", f"${h[3]:,.2f}", f"${h[4]:,.2f}", f_creacion, f_pago, h[7], metodo)
             self.tree_detalle.insert("", "end", values=valores_fila, tags=(h[7], h[0])) 
 
         total = self.db.obtener_total_individual(self.cliente_seleccionado_id)
-        self.lbl_cliente_total.config(text=f"DEUDA TOTAL: ${total:,.2f}")
+        self.lbl_cliente_total.config(text=f"TOTAL ADEUDADO: ${total:,.2f}")
 
     def guardar_nueva_deuda(self):
         if not self.cliente_seleccionado_id:
@@ -454,7 +505,7 @@ class Aplicacion(tk.Tk):
     def abrir_ventana_pago(self):
         seleccion = self.tree_detalle.selection()
         if not seleccion:
-            messagebox.showinfo("Atención", "Selecciona qué deuda quiere pagar el cliente.")
+            messagebox.showinfo("Atención", "Selecciona qué deuda quiere pagar el cliente (clic en la lista).")
             return
             
         tags = self.tree_detalle.item(seleccion, "tags")
@@ -462,155 +513,117 @@ class Aplicacion(tk.Tk):
         
         item = self.tree_detalle.item(seleccion)
         desc = item['values'][0]
-        falta_pagar = str(item['values'][3]).replace('$', '')
+        falta_pagar_str = str(item['values'][3]).replace('$', '').replace(',', '')
         
         # --- CALCULO DE DIAS Y SUGERENCIA ---
         fecha_creacion_str = item['values'][4]
         dias_atraso = 0
         porcentaje_sugerido = 0
-        txt_sugerencia = "Sin recargo sugerido"
+        txt_sugerencia = "Al día"
         
         if fecha_creacion_str:
             try:
                 f_creacion_obj = datetime.strptime(fecha_creacion_str[:10], "%Y-%m-%d")
                 f_hoy = datetime.now()
                 dias_atraso = (f_hoy - f_creacion_obj).days
-                
-                # REGLA: Cada 30 dias se suma 10%
                 bloques_30_dias = dias_atraso // 30
                 porcentaje_sugerido = bloques_30_dias * 10
                 
                 if porcentaje_sugerido > 0:
-                    txt_sugerencia = f"⚠ SUGERIDO: {porcentaje_sugerido}% ({dias_atraso} días de atraso)"
+                    txt_sugerencia = f"⚠ Atraso: {dias_atraso} días (+{porcentaje_sugerido}% sug.)"
                 else:
-                    txt_sugerencia = f"Sin recargo ({dias_atraso} días de atraso)"
-                    
-            except:
-                pass 
+                    txt_sugerencia = f"Al día ({dias_atraso} días)"
+            except: pass 
 
         try:
-            val_falta = float(falta_pagar)
+            val_falta = float(falta_pagar_str)
         except:
             val_falta = 0
             
         if val_falta <= 0:
-            messagebox.showinfo("Bien", "Esta deuda ya está pagada por completo.")
+            messagebox.showinfo("Bien", "Esta deuda ya está pagada.")
             return
 
-        # CONFIGURACION VENTANA POPUP
+        # POPUP PAGO
         popup = tk.Toplevel(self)
         popup.title("Ingresar Pago")
-        popup.geometry("500x650")
-        popup.configure(bg="white") # Fondo blanco limpio
+        popup.geometry("450x600")
+        popup.configure(bg="white")
         
-        # Titulo Principal
-        tk.Label(popup, text=f"Pagando: {desc}", font=("Arial", 14, "bold"), bg="white").pack(pady=10)
+        tk.Label(popup, text="Registrar Pago", font=FONTS['h2'], bg="white", fg=COLORS['secondary']).pack(pady=(20, 5))
+        tk.Label(popup, text=f"Item: {desc}", font=FONTS['body'], bg="white", fg="gray").pack()
+
+        # Frame Saldo
+        f_saldo = tk.Frame(popup, bg=COLORS['light'], padx=10, pady=10)
+        f_saldo.pack(fill="x", padx=30, pady=20)
+        tk.Label(f_saldo, text="Saldo Pendiente:", bg=COLORS['light'], font=FONTS['body']).pack(side="left")
+        tk.Label(f_saldo, text=f"${val_falta:,.2f}", bg=COLORS['light'], font=FONTS['h2'], fg=COLORS['danger']).pack(side="right")
         
-        # Panel de Deuda Original
-        frame_deuda = tk.LabelFrame(popup, text="Estado Actual", bg="white", padx=10, pady=5)
-        frame_deuda.pack(pady=5, padx=20, fill="x")
+        tk.Label(popup, text=txt_sugerencia, bg="white", fg=COLORS['warning'], font=FONTS['body_bold']).pack()
+
+        # Interés
+        f_int = tk.LabelFrame(popup, text="Recargo / Interés %", bg="white", font=FONTS['small'])
+        f_int.pack(fill="x", padx=30, pady=10)
         
-        tk.Label(frame_deuda, text=f"Capital a Pagar:", font=("Arial", 10), bg="white").pack(side="left")
-        tk.Label(frame_deuda, text=f"${val_falta}", font=("Arial", 12, "bold"), fg="red", bg="white").pack(side="right")
+        entry_pct = tk.Entry(f_int, justify="center", width=5, bg="white", relief="solid", bd=1)
+        entry_pct.pack(side="left", padx=10, pady=10, ipady=3)
+        entry_pct.insert(0, "0")
 
-        # Panel Sugerencia
-        color_sug = "#FF9800" if porcentaje_sugerido > 0 else "green"
-        tk.Label(popup, text=txt_sugerencia, fg=color_sug, font=("Arial", 10, "bold"), bg="white").pack(pady=10)
+        # Label Dinámico
+        lbl_total_cobrar = tk.Label(popup, text=f"Total: ${val_falta:,.2f}", font=FONTS['h2'], bg="white", fg=COLORS['primary'])
+        lbl_total_cobrar.pack(pady=10)
 
-        # --- SECCION INTERESES ---
-        frame_interes = tk.LabelFrame(popup, text="Aplicar Interés / Recargo", padx=10, pady=10, bg="white")
-        frame_interes.pack(pady=5, padx=20, fill="x")
-
-        # Entrada manual de porcentaje
-        tk.Label(frame_interes, text="% Interés:", bg="white").pack(side="left")
-        entry_porcentaje = tk.Entry(frame_interes, width=5, font=("Arial", 11), justify="center")
-        entry_porcentaje.pack(side="left", padx=5)
-        entry_porcentaje.insert(0, "0") # SIEMPRE EMPIEZA EN 0 POR DEFECTO
-
-        # Botones rapidos
-        def set_porcentaje(valor):
-            entry_porcentaje.delete(0, tk.END)
-            entry_porcentaje.insert(0, str(valor))
-            calcular_total_con_interes()
-
-        # Botones estéticos
-        tk.Button(frame_interes, text="10%", bg="#e0e0e0", command=lambda: set_porcentaje(10)).pack(side="left", padx=2)
-        tk.Button(frame_interes, text="20%", bg="#e0e0e0", command=lambda: set_porcentaje(20)).pack(side="left", padx=2)
-        
-        # Boton especial para la sugerencia
-        if porcentaje_sugerido > 0:
-             tk.Button(frame_interes, text=f"Aplicar Sugerido ({porcentaje_sugerido}%)", bg="#FFCC80", 
-                       command=lambda: set_porcentaje(porcentaje_sugerido)).pack(side="left", padx=5)
-
-        # LABEL DINAMICO DE TOTAL
-        lbl_total_con_interes = tk.Label(popup, text=f"Total a Cobrar: ${val_falta}", font=("Arial", 16, "bold"), fg="#2196F3", bg="white")
-        lbl_total_con_interes.pack(pady=15)
-
-        # Funcion de calculo en tiempo real
-        def calcular_total_con_interes(event=None):
+        def calc_total(e=None):
             try:
-                pct = float(entry_porcentaje.get())
-                total_calc = val_falta * (1 + pct / 100)
-                lbl_total_con_interes.config(text=f"Total a Cobrar: ${total_calc:.2f}")
-                return total_calc
-            except ValueError:
-                return val_falta
+                pct = float(entry_pct.get())
+                total = val_falta * (1 + pct/100)
+                lbl_total_cobrar.config(text=f"Total: ${total:,.2f}")
+                return total
+            except: return val_falta
 
-        # Vinculamos la entrada de texto al calculo
-        entry_porcentaje.bind("<KeyRelease>", calcular_total_con_interes)
-
-        # --- ENTRADA DE DINERO ---
-        frame_pago = tk.LabelFrame(popup, text="Ingreso del Dinero", bg="white", padx=10, pady=10)
-        frame_pago.pack(fill="x", padx=20, pady=5)
+        entry_pct.bind("<KeyRelease>", calc_total)
         
-        tk.Label(frame_pago, text="Monto Final que Paga:", bg="white").pack(pady=2)
-        entry_pago = tk.Entry(frame_pago, font=("Arial", 14), justify="center")
-        entry_pago.pack(pady=5, fill="x")
-        entry_pago.focus()
+        # Botones %
+        f_btns = tk.Frame(f_int, bg="white")
+        f_btns.pack(side="left")
+        tk.Button(f_btns, text="+10%", command=lambda: [entry_pct.delete(0,tk.END), entry_pct.insert(0,"10"), calc_total()], bg=COLORS['light'], relief="flat").pack(side="left", padx=2)
+        if porcentaje_sugerido > 0:
+             tk.Button(f_btns, text=f"Sugerido", command=lambda: [entry_pct.delete(0,tk.END), entry_pct.insert(0,str(porcentaje_sugerido)), calc_total()], bg=COLORS['warning'], fg="white", relief="flat").pack(side="left", padx=2)
 
-        # BOTON PAGO COMPLETO (Usa el total con interes)
-        def set_pago_completo():
-            total_final = calcular_total_con_interes()
-            entry_pago.delete(0, tk.END)
-            entry_pago.insert(0, f"{total_final:.2f}")
-            entry_pago.focus()
+        # Monto y Método
+        tk.Label(popup, text="Monto a Pagar ($):", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
+        e_pago = tk.Entry(popup, font=('Segoe UI', 14), justify="center", bg="white", relief="solid", bd=1)
+        e_pago.pack(fill="x", padx=30, pady=5, ipady=5)
+        e_pago.focus()
 
-        btn_completo = tk.Button(frame_pago, text="⚡ PAGO COMPLETO (Con Interés)", bg="#2196F3", fg="white", 
-                                 font=("Arial", 10, "bold"), command=set_pago_completo)
-        btn_completo.pack(pady=5, fill="x")
+        tk.Button(popup, text="▼ Pagar Totalidad", command=lambda: [e_pago.delete(0,tk.END), e_pago.insert(0, f"{calc_total():.2f}")], 
+                  font=FONTS['small'], bg="white", fg=COLORS['primary'], relief="flat", cursor="hand2").pack()
 
-        # --- FORMA DE PAGO ---
-        tk.Label(frame_pago, text="Forma de Pago:", bg="white").pack(pady=2)
-        combo_metodo = ttk.Combobox(frame_pago, values=["Efectivo", "Transferencia", "Débito", "Crédito", "Cheque"], state="readonly")
-        combo_metodo.current(0) 
-        combo_metodo.pack(pady=5, fill="x")
+        tk.Label(popup, text="Medio de Pago:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30, pady=(10,0))
+        c_metodo = ttk.Combobox(popup, values=["Efectivo", "Transferencia", "Débito", "Crédito"], state="readonly")
+        c_metodo.current(0)
+        c_metodo.pack(fill="x", padx=30, pady=5)
 
         def confirmar():
             try:
-                monto = float(entry_pago.get())
+                monto = float(e_pago.get())
                 if monto <= 0: return
-                
-                metodo = combo_metodo.get()
-                
-                self.db.registrar_pago_parcial(deuda_id, monto, metodo)
+                self.db.registrar_pago_parcial(deuda_id, monto, c_metodo.get())
                 self.actualizar_info_completa()
                 self.cargar_lista_clientes(self.entry_buscar.get())
                 popup.destroy()
-            except ValueError:
-                messagebox.showerror("Error", "Ingresa un número válido")
+            except: messagebox.showerror("Error", "Monto inválido")
 
-        tk.Button(popup, text="CONFIRMAR PAGO", bg="#4CAF50", fg="white", font=("Arial", 12, "bold"), 
-                  pady=10, command=confirmar).pack(pady=20, fill="x", padx=20)
-        
-        popup.bind('<Return>', lambda event: confirmar())
+        tk.Button(popup, text="CONFIRMAR PAGO", bg=COLORS['success'], fg="white", font=FONTS['body_bold'], relief="flat", 
+                  command=confirmar, cursor="hand2").pack(fill="x", padx=30, pady=20, ipady=10)
+        popup.bind('<Return>', lambda e: confirmar())
 
     def eliminar_error(self):
         seleccion = self.tree_detalle.selection()
         if not seleccion: return
-        tags = self.tree_detalle.item(seleccion, "tags")
-        deuda_id = tags[1]
-        if messagebox.askyesno("Borrar", "¿Borrar este registro permanentemente?"):
-            self.db.borrar_deuda_permanentemente(deuda_id)
+        if messagebox.askyesno("Confirmar", "¿Eliminar este registro permanentemente?\nEsto afectará el saldo total."):
+            tags = self.tree_detalle.item(seleccion, "tags")
+            self.db.borrar_deuda_permanentemente(tags[1])
             self.actualizar_info_completa()
             self.cargar_lista_clientes(self.entry_buscar.get())
 
