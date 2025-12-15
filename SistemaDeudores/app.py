@@ -37,9 +37,16 @@ class BaseDeDatos:
         """)
         self.conn.commit()
 
-    def agregar_cliente(self, dni, nombre, telefono, localidad):
+    # --- NUEVA FUNCION PARA VALIDAR ID UNICO ---
+    def existe_cliente(self, dni):
+        self.cursor.execute("SELECT id FROM clientes WHERE dni = ?", (dni,))
+        row = self.cursor.fetchone()
+        return row is not None
+
+    def agregar_cliente(self, dni, nombre, localidad):
+        # Pasamos un string vacio "" en telefono para mantener la estructura de la tabla
         self.cursor.execute("INSERT INTO clientes (dni, nombre, telefono, localidad) VALUES (?, ?, ?, ?)", 
-                            (dni, nombre, telefono, localidad))
+                            (dni, nombre, "", localidad))
         self.conn.commit()
 
     def agregar_deuda(self, cliente_id, monto, descripcion, fecha_manual=None):
@@ -141,8 +148,13 @@ class Aplicacion(tk.Tk):
         self.cargar_lista_clientes()
 
     def construir_panel_clientes(self, parent):
-        tk.Label(parent, text="📂 CLIENTES", font=("Arial", 14, "bold"), bg="#e0e0e0").pack(pady=20)
+        tk.Label(parent, text="📂 CLIENTES", font=("Arial", 14, "bold"), bg="#e0e0e0").pack(pady=(20, 10))
         
+        # --- CAMBIO: BOTON NUEVO CLIENTE ARRIBA Y MAS GRANDE ---
+        btn_nuevo = tk.Button(parent, text="+ NUEVO CLIENTE", bg="#2196F3", fg="white", 
+                              font=("Arial", 12, "bold"), command=self.modal_nuevo_cliente)
+        btn_nuevo.pack(fill="x", padx=15, pady=10, ipady=8) # ipady agranda la altura interna
+
         frame_search = tk.Frame(parent, bg="#e0e0e0")
         frame_search.pack(fill="x", padx=10)
         tk.Label(frame_search, text="Buscar (Nom/DNI/Loc):", bg="#e0e0e0").pack(side="left")
@@ -174,9 +186,6 @@ class Aplicacion(tk.Tk):
         self.tree_clientes.pack(side="left", fill="both", expand=True)
         self.tree_clientes.bind("<<TreeviewSelect>>", self.seleccionar_cliente)
 
-        btn_nuevo = tk.Button(parent, text="+ NUEVO CLIENTE", bg="#2196F3", fg="white", font=("Arial", 10, "bold"), command=self.modal_nuevo_cliente)
-        btn_nuevo.pack(fill="x", padx=10, pady=10, ipady=5)
-
     def construir_panel_detalle(self, parent):
         frame_encabezado = tk.Frame(parent, bg="white")
         frame_encabezado.pack(pady=10, fill="x", padx=20) 
@@ -199,24 +208,57 @@ class Aplicacion(tk.Tk):
         self.lbl_cliente_total = tk.Label(parent, text="", font=("Arial", 16, "bold"), fg="#d32f2f", bg="white")
         self.lbl_cliente_total.pack(pady=5)
 
-        frame_add = tk.LabelFrame(parent, text="Cargar Nueva Deuda", bg="white", padx=10, pady=10, font=("Arial", 11, "bold"), fg="#d32f2f")
+        # ============================================================
+        # REFACTORIZACIÓN DEL PANEL DE CARGA
+        # ============================================================
+        frame_add = tk.LabelFrame(parent, text="Cargar Nueva Deuda", bg="white", 
+                                  padx=15, pady=15, font=("Arial", 11, "bold"), fg="#d32f2f")
         frame_add.pack(fill="x", padx=20, pady=10)
 
-        tk.Label(frame_add, text="Repuesto:", bg="white").grid(row=0, column=0, padx=5, sticky="e")
-        self.entry_desc = tk.Entry(frame_add, width=35)
-        self.entry_desc.grid(row=0, column=1, padx=5)
+        # Configuración de columnas para Grid:
+        # Col 0, 2, 4 son etiquetas (tamaño fijo)
+        # Col 1, 3, 5 son inputs (se adaptan)
+        # Col 6 es un ESPACIO VACÍO que se estira (weight=1) para empujar el botón
+        # Col 7 es el botón
+        frame_add.columnconfigure(1, weight=2) # El repuesto tiene más espacio
+        frame_add.columnconfigure(3, weight=1)
+        frame_add.columnconfigure(5, weight=1)
+        frame_add.columnconfigure(6, weight=10) # GRAN ESPACIO SEPARADOR
 
-        tk.Label(frame_add, text="Monto ($):", bg="white").grid(row=0, column=2, padx=5, sticky="e")
-        self.entry_monto = tk.Entry(frame_add, width=15)
-        self.entry_monto.grid(row=0, column=3, padx=5)
+        # --- INPUTS ---
+        # 1. Repuesto
+        tk.Label(frame_add, text="Repuesto:", bg="white").grid(row=0, column=0, sticky="w")
+        self.entry_desc = tk.Entry(frame_add, width=25)
+        self.entry_desc.grid(row=0, column=1, sticky="ew", padx=(5, 15))
 
-        tk.Label(frame_add, text="Fecha (dd/mm/aaaa):", bg="white").grid(row=0, column=4, padx=5, sticky="e")
-        self.entry_fecha = tk.Entry(frame_add, width=15) 
-        self.entry_fecha.grid(row=0, column=5, padx=5)
-        tk.Label(frame_add, text="(Opcional)", font=("Arial", 8), fg="gray", bg="white").grid(row=1, column=5)
+        # 2. Monto
+        tk.Label(frame_add, text="Monto ($):", bg="white").grid(row=0, column=2, sticky="w")
+        self.entry_monto = tk.Entry(frame_add, width=10)
+        self.entry_monto.grid(row=0, column=3, sticky="ew", padx=(5, 15))
 
-        btn_add_deuda = tk.Button(frame_add, text="AGREGAR", bg="#FF9800", fg="black", font=("Arial", 9, "bold"), command=self.guardar_nueva_deuda)
-        btn_add_deuda.grid(row=0, column=6, padx=15, rowspan=2)
+        # 3. Fecha (Con sub-texto para que quede prolijo)
+        frame_fecha = tk.Frame(frame_add, bg="white")
+        frame_fecha.grid(row=0, column=4, columnspan=2, sticky="w")
+        
+        tk.Label(frame_fecha, text="Fecha:", bg="white").pack(side="left")
+        self.entry_fecha = tk.Entry(frame_fecha, width=12)
+        self.entry_fecha.pack(side="left", padx=5)
+        tk.Label(frame_fecha, text="(dd/mm/aaaa)", font=("Arial", 7), fg="gray", bg="white").pack(side="left")
+
+        # --- BOTÓN AGREGAR (SOLO A LA DERECHA) ---
+        # Height=2 le da altura de dos líneas de texto, haciéndolo ver "grande" y cuadrado.
+        btn_add_deuda = tk.Button(frame_add, text="AGREGAR", bg="#FF9800", fg="black", 
+                                  font=("Arial", 10, "bold"), 
+                                  cursor="hand2", relief="raised", borderwidth=2,
+                                  width=15, height=2,  # TAMAÑO FORZADO
+                                  command=self.guardar_nueva_deuda)
+        
+        # Lo ponemos en la columna 7. Gracias a la columna 6 vacía, esto se va al fondo a la derecha.
+        btn_add_deuda.grid(row=0, column=7, padx=10, sticky="e")
+        
+        # ============================================================
+        # FIN REFACTORIZACIÓN
+        # ============================================================
 
         frame_head = tk.Frame(parent, bg="white")
         frame_head.pack(fill="x", padx=20, pady=(10, 0))
@@ -278,16 +320,16 @@ class Aplicacion(tk.Tk):
                                  font=("Arial", 10, "bold"), padx=15, pady=8,
                                  command=self.eliminar_error)
         btn_eliminar.pack(side="right", padx=10)
-
     # --- LÓGICA ---
     def modal_nuevo_cliente(self):
         top = tk.Toplevel(self)
         top.title("Nuevo Cliente")
-        top.geometry("350x300")
+        top.geometry("350x250") # Achiqué un poco la ventana ya que saqué telefono
         
-        tk.Label(top, text="DNI / Código (Lo que se verá en la lista):").pack(pady=5)
+        tk.Label(top, text="DNI / Código (Debe ser ÚNICO):").pack(pady=5)
         e_dni = tk.Entry(top)
         e_dni.pack(pady=5)
+        e_dni.focus()
 
         tk.Label(top, text="Nombre y Apellido:").pack(pady=5)
         e_nombre = tk.Entry(top)
@@ -299,19 +341,27 @@ class Aplicacion(tk.Tk):
         e_localidad.pack(pady=5)
         e_localidad.current(0)
 
-        tk.Label(top, text="Teléfono:").pack(pady=5)
-        e_tel = tk.Entry(top)
-        e_tel.pack(pady=5)
+        # --- SE QUITÓ EL CAMPO TELEFONO ---
         
         def guardar():
-            if e_nombre.get() and e_dni.get():
-                self.db.agregar_cliente(e_dni.get(), e_nombre.get(), e_tel.get(), e_localidad.get())
-                self.cargar_lista_clientes()
-                top.destroy()
-            else:
+            dni = e_dni.get().strip()
+            nombre = e_nombre.get().strip()
+
+            if not dni or not nombre:
                 messagebox.showwarning("Faltan datos", "El DNI/Código y el Nombre son obligatorios")
+                return
+
+            # --- VALIDACIÓN DE ID ÚNICO ---
+            if self.db.existe_cliente(dni):
+                messagebox.showerror("Error", f"Ya existe un cliente con el ID/DNI '{dni}'.\nPor favor use otro.")
+                return
+
+            self.db.agregar_cliente(dni, nombre, e_localidad.get())
+            self.cargar_lista_clientes()
+            top.destroy()
         
         tk.Button(top, text="GUARDAR", bg="#2196F3", fg="white", command=guardar).pack(pady=20)
+        top.bind('<Return>', lambda event: guardar())
 
     def cargar_lista_clientes(self, filtro=""):
         for row in self.tree_clientes.get_children():
