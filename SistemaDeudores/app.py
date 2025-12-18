@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, Menu
 import sqlite3
 from datetime import datetime
 import os 
@@ -32,7 +32,7 @@ FONTS = {
 }
 
 # ==========================================
-# PARTE 1: LA BASE DE DATOS (LÓGICA MANUAL)
+# PARTE 1: LA BASE DE DATOS (COMPLETA)
 # ==========================================
 class BaseDeDatos:
     def __init__(self, db_name="taller_repuestos_final.db"):
@@ -41,6 +41,7 @@ class BaseDeDatos:
         self.crear_tablas()
 
     def crear_tablas(self):
+        # Tabla Clientes
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS clientes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +51,7 @@ class BaseDeDatos:
                 localidad TEXT
             )
         """)
+        # Tabla Deudas (Cabecera)
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS deudas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,9 +66,20 @@ class BaseDeDatos:
                 FOREIGN KEY(cliente_id) REFERENCES clientes(id)
             )
         """)
+        # Tabla Detalle de Pagos (Historial)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pagos_detalle (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deuda_id INTEGER,
+                monto REAL,
+                fecha TEXT,
+                metodo TEXT,
+                FOREIGN KEY(deuda_id) REFERENCES deudas(id)
+            )
+        """)
         self.conn.commit()
 
-    # --- CLIENTES ---
+    # --- MÉTODOS DE CLIENTES ---
     def existe_cliente(self, dni):
         self.cursor.execute("SELECT id FROM clientes WHERE dni = ?", (dni,))
         row = self.cursor.fetchone()
@@ -77,123 +90,6 @@ class BaseDeDatos:
                             (dni, nombre, "", localidad))
         self.conn.commit()
 
-    # --- DEUDAS Y PAGOS ---
-    def agregar_deuda(self, cliente_id, monto, descripcion, fecha_manual=None):
-        if fecha_manual:
-            fecha_final = fecha_manual
-        else:
-            fecha_final = datetime.now().strftime("%Y-%m-%d %H:%M")
-            
-        self.cursor.execute("""
-            INSERT INTO deudas (cliente_id, monto_total, monto_pagado, descripcion, estado, fecha_creacion) 
-            VALUES (?, ?, 0, ?, 'PENDIENTE', ?)
-        """, (cliente_id, monto, descripcion, fecha_final))
-        self.conn.commit()
-
-    def registrar_pago(self, deuda_id, nuevo_pago, metodo):
-        """
-        Registra un pago en una deuda específica. 
-        Si se paga de más, el excedente queda en esa deuda como saldo a favor (negativo).
-        """
-        # 1. Obtener datos actuales
-        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_id,))
-        res = self.cursor.fetchone()
-        if not res: return
-        
-        total, pagado_actual = res
-        pagado_nuevo = pagado_actual + nuevo_pago
-        
-        # Determinar estado
-        estado = "PENDIENTE"
-        # Usamos round para evitar problemas de decimales (ej: 0.0000001)
-        if round(pagado_nuevo, 2) >= round(total, 2):
-            estado = "PAGADA"
-        elif pagado_nuevo > 0:
-            estado = "PARCIAL"
-            
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        self.cursor.execute("""
-            UPDATE deudas SET monto_pagado = ?, metodo_pago = ?, fecha_pago = ?, estado = ?
-            WHERE id = ?
-        """, (pagado_nuevo, metodo, ahora, estado, deuda_id))
-        self.conn.commit()
-
-    # --- LÓGICA DE SALDOS A FAVOR (MANUAL) ---
-    def obtener_saldo_a_favor_disponible(self, cliente_id):
-        """
-        Suma todo el dinero que sobra de las boletas pagadas en exceso.
-        Retorna un número positivo (la cantidad disponible).
-        """
-        self.cursor.execute("""
-            SELECT SUM(monto_pagado - monto_total) 
-            FROM deudas 
-            WHERE cliente_id = ? AND monto_pagado > monto_total
-        """, (cliente_id,))
-        res = self.cursor.fetchone()
-        return res[0] if res and res[0] else 0.0
-
-    def usar_saldo_manual(self, cliente_id, deuda_destino_id):
-        """
-        Saca dinero de las boletas donde sobra y lo pone en la deuda_destino_id.
-        """
-        # 1. ¿Cuánto necesitamos para pagar la deuda destino?
-        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_destino_id,))
-        res = self.cursor.fetchone()
-        if not res: return False
-        
-        total_dest, pagado_dest = res
-        falta_pagar = total_dest - pagado_dest
-        
-        if falta_pagar <= 0: return False # Ya está pagada o tiene saldo a favor
-
-        # 2. Buscar boletas QUE TENGAN SOBRANTE (Donde sacamos la plata)
-        self.cursor.execute("""
-            SELECT id, monto_total, monto_pagado 
-            FROM deudas 
-            WHERE cliente_id = ? AND monto_pagado > monto_total
-            ORDER BY fecha_creacion ASC
-        """, (cliente_id,))
-        fuentes_de_saldo = self.cursor.fetchall()
-        
-        if not fuentes_de_saldo: return False
-
-        dinero_necesario = falta_pagar
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        for fuente in fuentes_de_saldo:
-            if dinero_necesario <= 0: break
-            
-            id_f, total_f, pagado_f = fuente
-            disponible_en_esta = pagado_f - total_f # El sobrante
-            
-            # Cuánto sacamos de esta boleta
-            a_tomar = min(dinero_necesario, disponible_en_esta)
-            
-            # A. RESTAR de la boleta fuente (Quitamos el sobrante)
-            nuevo_pagado_f = pagado_f - a_tomar
-            # El estado de la fuente sigue siendo PAGADA, solo que con menos saldo a favor
-            self.cursor.execute("UPDATE deudas SET monto_pagado = ? WHERE id = ?", (nuevo_pagado_f, id_f))
-            
-            # B. SUMAR a la deuda destino
-            pagado_dest += a_tomar
-            dinero_necesario -= a_tomar
-            
-        # 3. Actualizar la deuda destino final
-        estado_dest = "PARCIAL"
-        if round(pagado_dest, 2) >= round(total_dest, 2):
-            estado_dest = "PAGADA"
-            
-        self.cursor.execute("""
-            UPDATE deudas 
-            SET monto_pagado = ?, estado = ?, fecha_pago = ?, metodo_pago = 'SALDO A FAVOR'
-            WHERE id = ?
-        """, (pagado_dest, estado_dest, ahora, deuda_destino_id))
-        
-        self.conn.commit()
-        return True
-
-    # --- CONSULTAS DE VISUALIZACIÓN ---
     def obtener_clientes_con_saldo(self, filtro=""):
         query = """
             SELECT c.id, c.dni, c.nombre, c.localidad, 
@@ -207,6 +103,19 @@ class BaseDeDatos:
         filtro_sql = '%' + filtro + '%'
         self.cursor.execute(query, (filtro_sql, filtro_sql, filtro_sql))
         return self.cursor.fetchall()
+
+    # --- MÉTODOS DE DEUDAS ---
+    def agregar_deuda(self, cliente_id, monto, descripcion, fecha_manual=None):
+        if fecha_manual:
+            fecha_final = fecha_manual
+        else:
+            fecha_final = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+        self.cursor.execute("""
+            INSERT INTO deudas (cliente_id, monto_total, monto_pagado, descripcion, estado, fecha_creacion) 
+            VALUES (?, ?, 0, ?, 'PENDIENTE', ?)
+        """, (cliente_id, monto, descripcion, fecha_final))
+        self.conn.commit()
 
     def obtener_historial_cliente(self, cliente_id):
         # Indices: 0:id, 1:desc, 2:total, 3:pagado, 4:resta, 5:fecha_creacion, 6:fecha_pago, 7:estado, 8:metodo
@@ -230,8 +139,215 @@ class BaseDeDatos:
         return resultado[0] if resultado else 0
 
     def borrar_deuda_permanentemente(self, deuda_id):
+        # Primero borramos el historial de pagos de esa deuda
+        self.cursor.execute("DELETE FROM pagos_detalle WHERE deuda_id = ?", (deuda_id,))
+        # Luego borramos la deuda
         self.cursor.execute("DELETE FROM deudas WHERE id = ?", (deuda_id,))
         self.conn.commit()
+
+    def agregar_interes_deuda(self, deuda_id, interes):
+        """
+        Suma el monto de interés al total de la deuda para que no quede como saldo a favor.
+        """
+        self.cursor.execute("UPDATE deudas SET monto_total = monto_total + ? WHERE id = ?", (interes, deuda_id))
+        self.conn.commit()
+
+    # --- MÉTODOS DE PAGOS (LÓGICA MANUAL Y DETALLADA) ---
+    def registrar_pago(self, deuda_id, nuevo_pago, metodo):
+        """
+        Registra un pago en una deuda específica y guarda el movimiento en el historial.
+        """
+        # 1. Obtener datos actuales de la deuda
+        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_id,))
+        res = self.cursor.fetchone()
+        if not res: return
+        
+        total, pagado_actual = res
+        pagado_nuevo = pagado_actual + nuevo_pago
+        
+        # 2. Determinar estado
+        estado = "PENDIENTE"
+        # Usamos round para evitar problemas de decimales
+        if round(pagado_nuevo, 2) >= round(total, 2):
+            estado = "PAGADA"
+        elif pagado_nuevo > 0:
+            estado = "PARCIAL"
+            
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        # 3. Actualizar la deuda general
+        self.cursor.execute("""
+            UPDATE deudas SET monto_pagado = ?, metodo_pago = ?, fecha_pago = ?, estado = ?
+            WHERE id = ?
+        """, (pagado_nuevo, metodo, ahora, estado, deuda_id))
+
+        # 4. GUARDAR EN EL HISTORIAL DETALLADO
+        self.cursor.execute("""
+            INSERT INTO pagos_detalle (deuda_id, monto, fecha, metodo)
+            VALUES (?, ?, ?, ?)
+        """, (deuda_id, nuevo_pago, ahora, metodo))
+
+        self.conn.commit()
+
+    def obtener_detalles_pagos(self, deuda_id):
+        """Recupera la lista de pagos individuales para el click derecho"""
+        self.cursor.execute("""
+            SELECT fecha, monto, metodo 
+            FROM pagos_detalle 
+            WHERE deuda_id = ? 
+            ORDER BY id DESC
+        """, (deuda_id,))
+        return self.cursor.fetchall()
+
+    # --- LÓGICA DE SALDOS A FAVOR (MANUAL) ---
+    def obtener_saldo_a_favor_disponible(self, cliente_id):
+        """
+        Suma todo el dinero que sobra de las boletas pagadas en exceso.
+        Retorna un número positivo (la cantidad disponible para usar).
+        """
+        self.cursor.execute("""
+            SELECT SUM(monto_pagado - monto_total) 
+            FROM deudas 
+            WHERE cliente_id = ? AND monto_pagado > monto_total
+        """, (cliente_id,))
+        res = self.cursor.fetchone()
+        return res[0] if res and res[0] else 0.0
+
+    def usar_saldo_manual(self, cliente_id, deuda_destino_id):
+        """
+        Lógica compleja: Saca dinero de las boletas donde sobra y lo pone en la deuda_destino_id.
+        Registra los movimientos en el historial como 'SALDO A FAVOR'.
+        """
+        # 1. Calcular cuánto saldo a favor hay disponible
+        saldo_disponible = self.obtener_saldo_a_favor_disponible(cliente_id)
+        if saldo_disponible <= 0:
+            return False, "No hay saldo a favor disponible."
+
+        # 2. Verificar cuánto falta pagar en la deuda destino
+        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_destino_id,))
+        res = self.cursor.fetchone()
+        if not res: return False, "Deuda no encontrada."
+        
+        total_destino, pagado_destino = res
+        falta_pagar = total_destino - pagado_destino
+        
+        if falta_pagar <= 0:
+            return False, "La deuda destino ya está pagada."
+
+        # 3. Determinar cuánto vamos a usar
+        monto_a_usar = min(saldo_disponible, falta_pagar)
+        
+        # 4. Registrar el pago en la deuda destino
+        self.registrar_pago(deuda_destino_id, monto_a_usar, "SALDO A FAVOR")
+
+        # 5. Descontar ese dinero de las deudas que tenían saldo a favor
+        #    Reducimos su 'monto_pagado' hasta cubrir 'monto_a_usar'.
+        resto = monto_a_usar
+        
+        self.cursor.execute("SELECT id, monto_total, monto_pagado FROM deudas WHERE cliente_id = ? AND monto_pagado > monto_total", (cliente_id,))
+        superavitarias = self.cursor.fetchall()
+        
+        for d_id, d_total, d_pagado in superavitarias:
+            if resto <= 0: break
+            
+            excedente = d_pagado - d_total
+            descuento = min(resto, excedente)
+            
+            # Restamos al pagado de esa deuda
+            nuevo_pagado = d_pagado - descuento
+            self.cursor.execute("UPDATE deudas SET monto_pagado = ? WHERE id = ?", (nuevo_pagado, d_id))
+            
+            resto -= descuento
+
+        self.conn.commit()
+        return True, f"Se utilizaron ${monto_a_usar:,.2f} de saldo a favor."
+
+    # ==========================================
+    # NUEVOS METODOS PARA ESTADISTICAS
+    # ==========================================
+    
+    def obtener_top_deudores(self, limit=5):
+        """
+        Retorna la lista de los clientes con mayor deuda acumulada.
+        Formato: [(Nombre, DeudaTotal), ...]
+        """
+        sql = """
+            SELECT c.nombre, SUM(d.monto_total - d.monto_pagado) as deuda_acumulada
+            FROM deudas d
+            JOIN clientes c ON d.cliente_id = c.id
+            GROUP BY d.cliente_id
+            HAVING deuda_acumulada > 1
+            ORDER BY deuda_acumulada DESC
+            LIMIT ?
+        """
+        self.cursor.execute(sql, (limit,))
+        return self.cursor.fetchall()
+
+    def obtener_deuda_total(self):
+        """
+        Retorna la suma total de todas las deudas pendientes en el sistema.
+        """
+        sql = "SELECT SUM(monto_total - monto_pagado) FROM deudas WHERE (monto_total - monto_pagado) > 0"
+        self.cursor.execute(sql)
+        res = self.cursor.fetchone()
+        return res[0] if res and res[0] else 0.0
+
+    def obtener_cobro_mes(self):
+        """
+        Retorna la suma de pagos realizados en el mes actual.
+        Basado en la fecha del pago (tabla pagos_detalle).
+        """
+        mes_actual = datetime.now().strftime("%Y-%m")
+        patron = f"{mes_actual}%"
+        
+        sql = "SELECT SUM(monto) FROM pagos_detalle WHERE fecha LIKE ?"
+        self.cursor.execute(sql, (patron,))
+        res = self.cursor.fetchone()
+        return res[0] if res and res[0] else 0.0
+
+    def obtener_desglose_pagos_mes(self):
+        """
+        Retorna una lista de tuplas (metodo, monto) con lo recaudado este mes,
+        agrupado por método de pago (ignorando comentarios entre paréntesis).
+        """
+        mes_actual = datetime.now().strftime("%Y-%m")
+        patron = f"{mes_actual}%"
+        
+        # Obtenemos TODOS los pagos del mes con su método y monto
+        sql = "SELECT metodo, monto FROM pagos_detalle WHERE fecha LIKE ?"
+        self.cursor.execute(sql, (patron,))
+        filas = self.cursor.fetchall()
+        
+        # Agrupamos manual en Python para limpiar "Metodo (Comentario)" -> "Metodo"
+        agrupado = {}
+        for metodo_raw, monto in filas:
+            # Si dice "Debito (jee)" -> tomamos solo "Debito"
+            metodo_limpio = metodo_raw.split(" (")[0].strip()
+            
+            if metodo_limpio not in agrupado:
+                agrupado[metodo_limpio] = 0.0
+            agrupado[metodo_limpio] += monto
+            
+        # Convertimos a lista y ordenamos por monto descendente
+        resultado = list(agrupado.items())
+        resultado.sort(key=lambda x: x[1], reverse=True)
+        
+        return resultado
+
+    def obtener_recaudacion_historica(self):
+        """
+        Retorna la recaudación agrupada por mes (Año-Mes).
+        Devuelve lista de tuplas: (mes_str, total)
+        Ordenado del más reciente al más antiguo.
+        """
+        sql = """
+            SELECT substr(fecha, 1, 7) as mes, SUM(monto)
+            FROM pagos_detalle
+            GROUP BY substr(fecha, 1, 7)
+            ORDER BY mes DESC
+        """
+        self.cursor.execute(sql)
+        return self.cursor.fetchall()
 
 # ==========================================
 # PARTE 2: INTERFAZ GRÁFICA MEJORADA
@@ -338,8 +454,8 @@ class Aplicacion(tk.Tk):
         self.tree_clientes.bind("<<TreeviewSelect>>", self.seleccionar_cliente)
 
     def construir_panel_detalle(self, parent):
-        frame_acciones = tk.Frame(parent, bg=COLORS['light'], height=80)
-        frame_acciones.pack(side="bottom", fill="x", padx=30, pady=20) 
+        frame_acciones = tk.Frame(parent, bg=COLORS['light'])
+        frame_acciones.pack(side="bottom", fill="x", padx=30, pady=10) 
 
         btn_eliminar = tk.Button(frame_acciones, text="🗑️ Eliminar Registro", 
                                  bg="#95a5a6", fg="white", 
@@ -365,8 +481,25 @@ class Aplicacion(tk.Tk):
                               command=self.abrir_ventana_pago)
         btn_pagar.pack(side="right")
 
+        frame_acciones.pack(side="bottom", fill="x", padx=30, pady=20) 
+        
+        # --- BARRA SUPERIOR (BOTÓN ESTADÍSTICAS) ---
+        frame_top_bar = tk.Frame(parent, bg=COLORS['light'])
+        frame_top_bar.pack(side="top", fill="x", padx=30, pady=(5, 0))
+
+        btn_stats = tk.Button(frame_top_bar, text="📊 Ver Estadísticas", 
+                              bg=COLORS['primary'], fg="white", 
+                              font=('Segoe UI', 10, 'bold'), relief="flat", cursor="hand2",
+                              padx=15, pady=5,
+                              command=self.mostrar_estadisticas)
+        btn_stats.pack(side="right")
+
         frame_encabezado = tk.Frame(parent, bg=COLORS['light'])
-        frame_encabezado.pack(side="top", pady=15, fill="x", padx=30) 
+        frame_encabezado.pack(side="top", pady=(5, 0), fill="x", padx=30) 
+        
+        
+
+
 
         ruta_completa_imagen = os.path.join(self.carpeta_base, "Logo_Sbrolla.png")
         if os.path.exists(ruta_completa_imagen):
@@ -386,7 +519,7 @@ class Aplicacion(tk.Tk):
                                            padx=20, pady=10)      
         self.lbl_cliente_nombre.pack(side="left", expand=True, fill="x")
 
-        # --- ETIQUETAS DE TOTALES ---
+        # --- ETIQUETAS DE TOTALES (Debajo del nombre, como antes) ---
         frame_totales = tk.Frame(parent, bg=COLORS['light'])
         frame_totales.pack(side="top", pady=5)
         
@@ -396,13 +529,15 @@ class Aplicacion(tk.Tk):
         self.lbl_saldo_disponible = tk.Label(frame_totales, text="", font=('Segoe UI', 14, 'bold'), fg=COLORS['success'], bg=COLORS['light'])
         self.lbl_saldo_disponible.pack(anchor="center")
 
+
+
         # --- FORMULARIO NUEVA DEUDA ---
         frame_title_add = tk.Frame(parent, bg=COLORS['light'])
-        frame_title_add.pack(side="top", fill="x", padx=30, pady=(15, 0))
+        frame_title_add.pack(side="top", fill="x", padx=30, pady=(10, 0))
         tk.Label(frame_title_add, text="Agendar nueva deuda", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(side="left")
 
-        frame_add = tk.Frame(parent, bg="white", padx=20, pady=20, relief="solid", bd=1)
-        frame_add.pack(side="top", fill="x", padx=30, pady=(5, 10))
+        frame_add = tk.Frame(parent, bg="white", padx=20, pady=15, relief="solid", bd=1)
+        frame_add.pack(side="top", fill="x", padx=30, pady=5)
 
         frame_add.columnconfigure(1, weight=2) 
         frame_add.columnconfigure(3, weight=1)
@@ -426,10 +561,16 @@ class Aplicacion(tk.Tk):
         
         self.entry_dia = tk.Entry(frame_fecha, width=3, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
         self.entry_dia.pack(side="left", ipady=5)
+        # Auto-focus al mes al escribir 2 digitos
+        self.entry_dia.bind("<KeyRelease>", lambda e: self.entry_mes.focus() if len(self.entry_dia.get()) >= 2 else None)
+
         tk.Label(frame_fecha, text="/", bg="white", font=FONTS['body_bold']).pack(side="left", padx=2)
         
         self.entry_mes = tk.Entry(frame_fecha, width=3, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
         self.entry_mes.pack(side="left", ipady=5)
+        # Auto-focus al anio al escribir 2 digitos
+        self.entry_mes.bind("<KeyRelease>", lambda e: self.entry_anio.focus() if len(self.entry_mes.get()) >= 2 else None)
+
         tk.Label(frame_fecha, text="/", bg="white", font=FONTS['body_bold']).pack(side="left", padx=2)
         
         self.entry_anio = tk.Entry(frame_fecha, width=5, font=FONTS['body'], justify="center", bg="white", relief="solid", bd=1)
@@ -445,12 +586,12 @@ class Aplicacion(tk.Tk):
         
         # --- TABLA HISTORIAL ---
         frame_head = tk.Frame(parent, bg=COLORS['light'])
-        frame_head.pack(side="top", fill="x", padx=30, pady=(20, 5))
+        frame_head.pack(side="top", fill="x", padx=30, pady=(10, 5))
         
         tk.Label(frame_head, text="Historial de Movimientos", bg=COLORS['light'], font=FONTS['h2'], fg=COLORS['text']).pack(side="left")
         
         self.combo_filtro = ttk.Combobox(frame_head, values=["Más Recientes", "Más Antiguas", "Por Estado"], state="readonly", width=20)
-        self.combo_filtro.current(0)
+        self.combo_filtro.current(2)
         self.combo_filtro.pack(side="right")
         self.combo_filtro.bind("<<ComboboxSelected>>", self.aplicar_filtro)
         tk.Label(frame_head, text="Ordenar:", bg=COLORS['light'], font=FONTS['small']).pack(side="right", padx=5)
@@ -462,7 +603,7 @@ class Aplicacion(tk.Tk):
         scrollbar_d.pack(side="right", fill="y")
 
         cols_d = ("Desc", "Original", "Pagado", "Resta", "Fecha Ingreso", "Ultimo Pago", "Estado", "Metodo")
-        self.tree_detalle = ttk.Treeview(frame_tabla_det, columns=cols_d, show="headings", yscrollcommand=scrollbar_d.set)
+        self.tree_detalle = ttk.Treeview(frame_tabla_det, columns=cols_d, show="headings", height=45, yscrollcommand=scrollbar_d.set)
         scrollbar_d.config(command=self.tree_detalle.yview)
 
         headers = ["Concepto", "Original ($)", "Pagado ($)", "Debe ($)", "Fecha Creación", "Fecha Pago", "Estado", "Método"]
@@ -482,6 +623,44 @@ class Aplicacion(tk.Tk):
 
         self.tree_detalle.bind("<Motion>", self.verificar_tooltip)
         self.tree_detalle.bind("<Leave>", self.ocultar_tooltip)
+        
+        # --- CLICK DERECHO PARA MENU CONTEXTUAL ---
+        self.tree_detalle.bind("<Button-3>", self.mostrar_menu_contextual)
+        self.menu_contextual = Menu(self, tearoff=0)
+        self.menu_contextual.add_command(label="Ver Historial de Pagos", command=self.ver_historial_pagos)
+
+    def mostrar_menu_contextual(self, event):
+        item = self.tree_detalle.identify_row(event.y)
+        if item:
+            self.tree_detalle.selection_set(item)
+            self.menu_contextual.post(event.x_root, event.y_root)
+
+    def ver_historial_pagos(self):
+        seleccion = self.tree_detalle.selection()
+        if not seleccion: return
+        deuda_id = self.tree_detalle.item(seleccion, "tags")[1]
+        descripcion = self.tree_detalle.item(seleccion)['values'][0]
+
+        pagos = self.db.obtener_detalles_pagos(deuda_id)
+        
+        top = tk.Toplevel(self)
+        top.title(f"Pagos: {descripcion}")
+        top.geometry("450x300")
+        top.configure(bg="white")
+        
+        if not pagos:
+            tk.Label(top, text="No hay pagos registrados para esta deuda.", bg="white").pack(pady=20)
+            return
+
+        cols = ("Fecha", "Monto", "Metodo")
+        tree = ttk.Treeview(top, columns=cols, show="headings")
+        tree.heading("Fecha", text="Fecha"); tree.column("Fecha", width=120, anchor="center")
+        tree.heading("Monto", text="Monto"); tree.column("Monto", width=100, anchor="center")
+        tree.heading("Metodo", text="Método"); tree.column("Metodo", width=150, anchor="center")
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        for p in pagos:
+            tree.insert("", "end", values=(p[0], f"${p[1]:,.2f}", p[2]))
 
     # --- LÓGICA DE TOOLTIPS (Concepto Y Método) ---
     def verificar_tooltip(self, event):
@@ -489,7 +668,6 @@ class Aplicacion(tk.Tk):
             region = self.tree_detalle.identify("region", event.x, event.y)
             if region == "cell":
                 col_id = self.tree_detalle.identify_column(event.x)
-                
                 if col_id in ("#1", "#8"):
                     row_id = self.tree_detalle.identify_row(event.y)
                     if row_id:
@@ -529,6 +707,135 @@ class Aplicacion(tk.Tk):
         if self.tooltip_window:
             self.tooltip_window.destroy()
             self.tooltip_window = None
+
+
+    # --- ESTADÍSTICAS ---
+    def mostrar_estadisticas(self):
+        top = tk.Toplevel(self)
+        top.title("Panel de Estadísticas")
+        top.geometry("900x550")
+        top.configure(bg=COLORS['light'])
+        
+        # Header Principal
+        frame_head = tk.Frame(top, bg="white", pady=15)
+        frame_head.pack(fill="x")
+        tk.Label(frame_head, text="📊 Panel de Control y Estadísticas", font=FONTS['h1'], bg="white", fg=COLORS['primary']).pack()
+        
+        # Contenedor Principal (Grid 2 columnas)
+        main_content = tk.Frame(top, bg=COLORS['light'])
+        main_content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        main_content.columnconfigure(0, weight=1)
+        main_content.columnconfigure(1, weight=1)
+
+        # Footer Actions (Definirlo antes para asegurar que quede abajo)
+        frame_foot = tk.Frame(top, bg=COLORS['light'])
+        frame_foot.pack(side="bottom", pady=10)
+
+        tk.Button(frame_foot, text="🗓️ Historial Mensual", 
+                  command=self.mostrar_historial_mensual,
+                  bg=COLORS['primary'], fg="white", font=FONTS['body_bold'], relief="flat", padx=15).pack(side="left", padx=10)
+
+        tk.Button(frame_foot, text="Cerrar Panel", command=top.destroy, bg=COLORS['secondary'], fg="white", font=FONTS['body_bold'], relief="flat", padx=20).pack(side="left", padx=10)
+        
+        # --- COLUMNA IZQUIERDA: TARJETAS Y TOP DEUDORES ---
+        left_panel = tk.Frame(main_content, bg=COLORS['light'])
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        
+        # Cálculo de datos generales
+        deuda_total = self.db.obtener_deuda_total()
+        cobro_mes = self.db.obtener_cobro_mes()
+        
+        # Tarjetas Resumen
+        frame_cards = tk.Frame(left_panel, bg=COLORS['light'])
+        frame_cards.pack(fill="x", pady=(0, 20))
+        
+        # Card 1
+        c1 = tk.Frame(frame_cards, bg="white", padx=15, pady=15, relief="solid", bd=1)
+        c1.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        tk.Label(c1, text="Deuda Activa", font=FONTS['small'], bg="white", fg="gray").pack(anchor="w")
+        tk.Label(c1, text=f"${deuda_total:,.2f}", font=FONTS['h1'], fg=COLORS['danger'], bg="white").pack(anchor="w")
+
+        # Card 2
+        c2 = tk.Frame(frame_cards, bg="white", padx=15, pady=15, relief="solid", bd=1)
+        c2.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        tk.Label(c2, text="Ingresos del Mes", font=FONTS['small'], bg="white", fg="gray").pack(anchor="w")
+        tk.Label(c2, text=f"${cobro_mes:,.2f}", font=FONTS['h1'], fg=COLORS['success'], bg="white").pack(anchor="w")
+        
+        # Top Deudores
+        tk.Label(left_panel, text="🏆 Top 5 Mayores Deudores", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(anchor="w", pady=(0, 10))
+        
+        frame_table = tk.Frame(left_panel, bg="white", relief="solid", bd=1)
+        frame_table.pack(fill="both", expand=True)
+        
+        cols = ("Nombre", "Deuda")
+        tree = ttk.Treeview(frame_table, columns=cols, show="headings", height=8)
+        tree.heading("Nombre", text="Cliente")
+        tree.column("Nombre", width=220)
+        tree.heading("Deuda", text="Deuda")
+        tree.column("Deuda", width=100, anchor="e")
+        tree.pack(fill="both", expand=True)
+        
+        top_deudores = self.db.obtener_top_deudores()
+        for nombre, deuda in top_deudores:
+            tree.insert("", "end", values=(nombre, f"${deuda:,.2f}"))
+
+        # --- COLUMNA DERECHA: DESGLOSE DE INGRESOS ---
+        right_panel = tk.Frame(main_content, bg=COLORS['light'])
+        right_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        
+        tk.Label(right_panel, text="💰 Desglose de Ingresos (Mes)", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(anchor="w", pady=(0, 10))
+        
+        frame_breakdown = tk.Frame(right_panel, bg="white", relief="solid", bd=1)
+        frame_breakdown.pack(fill="both", expand=True, padx=0)
+        
+        cols_b = ("Metodo", "Monto", "Porc")
+        tree_b = ttk.Treeview(frame_breakdown, columns=cols_b, show="headings")
+        tree_b.heading("Metodo", text="Método Pago")
+        tree_b.column("Metodo", width=120)
+        tree_b.heading("Monto", text="Recaudado")
+        tree_b.column("Monto", width=100, anchor="e")
+        tree_b.heading("Porc", text="% Total")
+        tree_b.column("Porc", width=60, anchor="center")
+        tree_b.pack(fill="both", expand=True)
+        
+        desglose = self.db.obtener_desglose_pagos_mes()
+        total_desglose = sum(x[1] for x in desglose) if desglose else 1
+        
+        for metodo, monto in desglose:
+            porcentaje = (monto / total_desglose) * 100
+            tree_b.insert("", "end", values=(metodo, f"${monto:,.2f}", f"{porcentaje:.1f}%"))
+
+
+    def mostrar_historial_mensual(self):
+        top = tk.Toplevel(self)
+        top.title("Historial de Recaudación Mensual")
+        top.geometry("400x500")
+        top.configure(bg="white")
+        
+        tk.Label(top, text="📅 Recaudación por Mes", font=FONTS['h2'], bg="white", fg=COLORS['primary']).pack(pady=15)
+        
+        frame_table = tk.Frame(top, bg="white", relief="solid", bd=1)
+        frame_table.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        cols = ("Mes", "Monto")
+        tree = ttk.Treeview(frame_table, columns=cols, show="headings")
+        tree.heading("Mes", text="Mes (Año-Mes)")
+        tree.column("Mes", width=150, anchor="center")
+        tree.heading("Monto", text="Total Cobrado")
+        tree.column("Monto", width=150, anchor="e")
+        
+        scrollbar = ttk.Scrollbar(frame_table, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        datos = self.db.obtener_recaudacion_historica()
+        for mes, monto in datos:
+            tree.insert("", "end", values=(mes, f"${monto:,.2f}"))
+            
+        tk.Button(top, text="Cerrar", command=top.destroy, bg=COLORS['secondary'], fg="white").pack(pady=10)
 
     # --- LÓGICA GENERAL ---
     def modal_nuevo_cliente(self):
@@ -589,6 +896,7 @@ class Aplicacion(tk.Tk):
         clientes = self.db.obtener_clientes_con_saldo(filtro)
         for cli in clientes:
             saldo = cli[4]
+            # Mostrar el saldo tal cual
             if saldo < 0:
                 txt_saldo = f"+ ${abs(saldo):,.2f} (Favor)"
             else:
@@ -651,6 +959,7 @@ class Aplicacion(tk.Tk):
         if total > 0:
             self.lbl_cliente_total.config(text=f"TOTAL ADEUDADO: ${total:,.2f}", fg=COLORS['danger'])
         elif total < 0:
+            # Caso raro donde el total general es negativo, pero visualmente preferimos mostrarlo como "Favor"
             self.lbl_cliente_total.config(text=f"SALDO NETO: +${abs(total):,.2f}", fg=COLORS['success'])
         else:
             self.lbl_cliente_total.config(text="CUENTA AL DÍA ($0.00)", fg=COLORS['success'])
@@ -721,6 +1030,7 @@ class Aplicacion(tk.Tk):
         
         item = self.tree_detalle.item(seleccion)
         desc = item['values'][0]
+        # Limpieza del string de deuda para obtener float
         texto_debe = str(item['values'][3]) 
         
         if "Favor" in texto_debe:
@@ -731,28 +1041,20 @@ class Aplicacion(tk.Tk):
              except:
                  val_falta = 0
         
+        # Sugerencias de fecha
         fecha_creacion_str = item['values'][4]
-        dias_atraso = 0
-        porcentaje_sugerido = 0
         txt_sugerencia = "Al día"
-        
         if fecha_creacion_str:
             try:
                 f_creacion_obj = datetime.strptime(fecha_creacion_str[:10], "%Y-%m-%d")
                 f_hoy = datetime.now()
                 dias_atraso = (f_hoy - f_creacion_obj).days
-                bloques_30_dias = dias_atraso // 30
-                porcentaje_sugerido = bloques_30_dias * 10
-                
-                if porcentaje_sugerido > 0:
-                    txt_sugerencia = f"⚠ Atraso: {dias_atraso} días (+{porcentaje_sugerido}% sug.)"
-                else:
-                    txt_sugerencia = f"Al día ({dias_atraso} días)"
+                if dias_atraso > 30:
+                    txt_sugerencia = f"⚠ Atraso: {dias_atraso} días"
             except: pass 
 
         if val_falta <= 0 and "Favor" not in texto_debe:
-            messagebox.showinfo("Bien", "Esta deuda ya está pagada o tiene saldo a favor.")
-            # Permitimos abrir igual por si quiere agregar más saldo a favor, pero avisamos.
+            messagebox.showinfo("Bien", "Esta deuda ya está pagada o tiene saldo a favor. (Puedes agregar más pago si deseas aumentar el saldo)")
 
         popup = tk.Toplevel(self)
         popup.title("Ingresar Pago")
@@ -789,12 +1091,6 @@ class Aplicacion(tk.Tk):
 
         entry_pct.bind("<KeyRelease>", calc_total)
         
-        f_btns = tk.Frame(f_int, bg="white")
-        f_btns.pack(side="left")
-        tk.Button(f_btns, text="+10%", command=lambda: [entry_pct.delete(0,tk.END), entry_pct.insert(0,"10"), calc_total()], bg=COLORS['light'], relief="flat").pack(side="left", padx=2)
-        if porcentaje_sugerido > 0:
-             tk.Button(f_btns, text=f"Sugerido", command=lambda: [entry_pct.delete(0,tk.END), entry_pct.insert(0,str(porcentaje_sugerido)), calc_total()], bg=COLORS['warning'], fg="white", relief="flat").pack(side="left", padx=2)
-
         tk.Label(popup, text="Monto a Pagar ($):", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
         e_pago = tk.Entry(popup, font=('Segoe UI', 14), justify="center", bg="white", relief="solid", bd=1)
         e_pago.pack(fill="x", padx=30, pady=5, ipady=5)
@@ -817,6 +1113,20 @@ class Aplicacion(tk.Tk):
                 monto = float(e_pago.get())
                 if monto <= 0: return
                 
+                # --- LÓGICA DE INTERÉS AGREGADA ---
+                try:
+                    pct = float(entry_pct.get())
+                except: pct = 0.0
+
+                if pct > 0:
+                    # El interés se calcula sobre lo que faltaba pagar (val_falta)
+                    # Al confirmar, SUMAMOS ese interés a la deuda original 'monto_total'
+                    # Así cuando paguen el total + interés, la cuenta da 0 y no sobra plata.
+                    interes_monto = val_falta * (pct / 100.0)
+                    if interes_monto > 0:
+                        self.db.agregar_interes_deuda(deuda_id, interes_monto)
+                # ----------------------------------
+
                 metodo_final = c_metodo.get()
                 obs = e_obs.get().strip()
                 if obs:
