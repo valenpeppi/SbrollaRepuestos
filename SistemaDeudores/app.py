@@ -66,50 +66,81 @@ class BaseDeDatos:
 
     def unificar_pagos(self, cliente_id):
         """
-        Toma TODO lo pagado por el cliente y lo redistribuye ordenadamente
-        desde la deuda más vieja a la más nueva.
-        Si sobra dinero, lo deja como saldo a favor en la última deuda.
-        Esto soluciona el problema de tener saldo a favor y deudas pendientes a la vez.
+        Redistribuye el dinero del cliente.
+        Lógica corregida: Asigna 'SALDO' como método tanto si el pago es TOTAL
+        como si es PARCIAL, siempre que se esté usando dinero acumulado.
         """
-        # 1. Obtener todas las deudas del cliente ordenadas por fecha (más viejas primero)
-        self.cursor.execute("SELECT id, monto_total, monto_pagado FROM deudas WHERE cliente_id = ? ORDER BY fecha_creacion ASC", (cliente_id,))
+        # 1. Traemos la info existente de todas las deudas del cliente
+        self.cursor.execute("""
+            SELECT id, monto_total, monto_pagado, fecha_pago, metodo_pago 
+            FROM deudas 
+            WHERE cliente_id = ? 
+            ORDER BY fecha_creacion ASC
+        """, (cliente_id,))
         deudas = self.cursor.fetchall()
         
         if not deudas: return
 
-        # 2. Calcular la "Bolsa Total de Dinero" que ha pagado el cliente en su historia
+        # 2. Calcular la bolsa total de dinero pagado históricamente
         total_pagado_historico = sum(d[2] for d in deudas)
-        
         dinero_disponible = total_pagado_historico
         
-        # 3. Ir llenando las deudas una por una
-        for i, (id_deuda, monto_total, _) in enumerate(deudas):
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # 3. Redistribuir el dinero disponible deuda por deuda
+        for i, (id_deuda, monto_total, pagado_antiguo, fecha_antigua, metodo_antiguo) in enumerate(deudas):
             es_la_ultima = (i == len(deudas) - 1)
             
+            # Valores iniciales (asumimos pendiente y mantenemos datos viejos si existen)
+            nuevo_estado = "PENDIENTE"
+            nueva_fecha = fecha_antigua
+            nuevo_metodo = metodo_antiguo 
+            
             if dinero_disponible >= monto_total:
-                # Si hay dinero para pagar toda esta deuda
+                # --- CASO A: ALCANZA PARA PAGAR TODO ---
                 pago_a_asignar = monto_total
-                estado = "PAGADA"
                 
-                # Si es la última y TODAVÍA sobra dinero, se lo sumamos todo aquí (Saldo a favor)
+                # Si ya tenía un método manual (ej: Efectivo), lo respetamos.
+                # Si NO tenía método (o era vacío) y se paga ahora autom., es por SALDO.
+                if nuevo_metodo and nuevo_metodo not in ["", "-"]:
+                    nuevo_estado = "PAGADA"
+                else:
+                    nuevo_estado = "PAGADO (SALDO)"
+                    nuevo_metodo = "SALDO"
+
+                if not nueva_fecha: nueva_fecha = ahora
+                
+                # Caso especial: Sobra dinero en la última boleta (Saldo a favor futuro)
                 if es_la_ultima and (dinero_disponible > monto_total):
                     pago_a_asignar = dinero_disponible
-                    # El estado sigue siendo PAGADA (con saldo a favor)
+                    # El estado sigue siendo pagado, el monto reflejará el exceso
+                    
             else:
-                # Si el dinero no alcanza o es 0
+                # --- CASO B: NO ALCANZA (PARCIAL O PENDIENTE) ---
                 pago_a_asignar = dinero_disponible
+                
                 if pago_a_asignar > 0:
-                    estado = "PARCIAL"
+                    nuevo_estado = "PARCIAL"
+                    if not nueva_fecha: nueva_fecha = ahora
+                    
+                    # CORRECCIÓN IMPORTANTE:
+                    # Si es parcial y no tiene método asignado, ES SALDO.
+                    if not nuevo_metodo or nuevo_metodo in ["", "-"]:
+                        nuevo_metodo = "SALDO"
                 else:
-                    estado = "PENDIENTE"
+                    nuevo_estado = "PENDIENTE"
+                    nueva_fecha = None
+                    nuevo_metodo = None # Si vuelve a pendiente, limpiamos
             
-            # Descontamos de la bolsa lo que acabamos de asignar
             dinero_disponible -= pago_a_asignar
-            if dinero_disponible < 0: dinero_disponible = 0 # Seguridad
+            if dinero_disponible < 0: dinero_disponible = 0
             
-            # Actualizamos la deuda en la base de datos
-            self.cursor.execute("UPDATE deudas SET monto_pagado = ?, estado = ? WHERE id = ?", 
-                                (pago_a_asignar, estado, id_deuda))
+            # Guardamos los cambios en la base de datos
+            self.cursor.execute("""
+                UPDATE deudas 
+                SET monto_pagado = ?, estado = ?, fecha_pago = ?, metodo_pago = ?
+                WHERE id = ?
+            """, (pago_a_asignar, nuevo_estado, nueva_fecha, nuevo_metodo, id_deuda))
         
         self.conn.commit()
 
@@ -135,11 +166,11 @@ class BaseDeDatos:
         """, (cliente_id, monto, descripcion, fecha_final))
         self.conn.commit()
         
-        # IMPORTANTE: Reorganizar pagos para usar saldo a favor si existe
+        # Ejecutar unificación para aplicar saldos a favor automáticamente
         self.unificar_pagos(cliente_id)
 
     def registrar_pago_parcial(self, deuda_id, nuevo_pago, metodo):
-        # Primero registramos el pago en la deuda seleccionada
+        # 1. Registrar el dinero en la deuda seleccionada
         self.cursor.execute("SELECT monto_pagado, cliente_id FROM deudas WHERE id = ?", (deuda_id,))
         res = self.cursor.fetchone()
         if not res: return
@@ -147,15 +178,19 @@ class BaseDeDatos:
         pagado_actual, cid = res
         pagado_nuevo = pagado_actual + nuevo_pago
         
-        self.cursor.execute("UPDATE deudas SET monto_pagado = ?, metodo_pago = ? WHERE id = ?", 
-                           (pagado_nuevo, metodo, deuda_id))
+        # Usamos la fecha actual para este pago específico
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        self.cursor.execute("""
+            UPDATE deudas SET monto_pagado = ?, metodo_pago = ?, fecha_pago = ? 
+            WHERE id = ?
+        """, (pagado_nuevo, metodo, ahora, deuda_id))
         self.conn.commit()
         
-        # IMPORTANTE: Reorganizar todo el historial para mantener coherencia
+        # 2. Reordenar toda la cuenta corriente para asegurar consistencia
         self.unificar_pagos(cid)
 
     def obtener_clientes_con_saldo(self, filtro=""):
-        # Modificado para permitir saldos negativos (Saldo a favor)
         query = """
             SELECT c.id, c.dni, c.nombre, c.localidad, 
                    COALESCE(SUM(d.monto_total - d.monto_pagado), 0) as saldo_restante
@@ -170,7 +205,6 @@ class BaseDeDatos:
         return self.cursor.fetchall()
 
     def obtener_historial_cliente(self, cliente_id):
-        # Modificado para permitir visualización de saldo a favor por item
         query = """
             SELECT id, descripcion, monto_total, monto_pagado, 
                    (monto_total - monto_pagado) as resta, 
@@ -182,7 +216,6 @@ class BaseDeDatos:
         return self.cursor.fetchall()
 
     def obtener_total_individual(self, cliente_id):
-        # Modificado para suma algebraica pura
         query = """
             SELECT COALESCE(SUM(monto_total - monto_pagado), 0) 
             FROM deudas WHERE cliente_id = ?
@@ -192,7 +225,6 @@ class BaseDeDatos:
         return resultado[0] if resultado else 0
 
     def borrar_deuda_permanentemente(self, deuda_id):
-        # Obtenemos el cliente antes de borrar para reacomodar sus saldos
         self.cursor.execute("SELECT cliente_id FROM deudas WHERE id = ?", (deuda_id,))
         row = self.cursor.fetchone()
         
@@ -211,7 +243,6 @@ class Aplicacion(tk.Tk):
         self.geometry("1350x780")
         self.configure(bg=COLORS['light'])
         
-        # Lógica de rutas para logo en .exe
         if getattr(sys, 'frozen', False):
             self.carpeta_base = os.path.dirname(sys.executable)
         else:
@@ -225,12 +256,10 @@ class Aplicacion(tk.Tk):
         
         self.cliente_seleccionado_id = None
         
-        # Variables para Tooltip
         self.tooltip_window = None
         self.last_tooltip_row = None
         self.last_tooltip_col = None 
 
-        # --- ESTILOS TTK ---
         self.style = ttk.Style()
         self.style.theme_use("clam")
         
@@ -248,7 +277,6 @@ class Aplicacion(tk.Tk):
         
         self.style.map('Treeview', background=[('selected', COLORS['primary'])])
 
-        # Layout Principal
         panel_izquierdo = tk.Frame(self, width=380, bg=COLORS['secondary'])
         panel_izquierdo.pack(side="left", fill="both", expand=False)
         
@@ -415,7 +443,7 @@ class Aplicacion(tk.Tk):
         scrollbar_d.config(command=self.tree_detalle.yview)
 
         headers = ["Concepto", "Original ($)", "Pagado ($)", "Debe ($)", "Fecha Creación", "Fecha Pago", "Estado", "Método"]
-        widths = [200, 80, 80, 80, 100, 100, 80, 80]
+        widths = [200, 80, 80, 80, 100, 100, 100, 100] # Ancho ajustado
         
         for i, col in enumerate(cols_d):
             self.tree_detalle.heading(col, text=headers[i])
@@ -423,16 +451,18 @@ class Aplicacion(tk.Tk):
         
         self.tree_detalle.column("Desc", anchor="w") 
 
+        # --- COLORES DE LOS ESTADOS ---
         self.tree_detalle.tag_configure('PENDIENTE', background='#ffebee', foreground=COLORS['danger']) 
         self.tree_detalle.tag_configure('PARCIAL', background='#fff3e0', foreground=COLORS['text'])    
-        self.tree_detalle.tag_configure('PAGADA', background='#e8f5e9', foreground=COLORS['success'])  
+        self.tree_detalle.tag_configure('PAGADA', background='#e8f5e9', foreground=COLORS['success'])
+        self.tree_detalle.tag_configure('PAGADO (SALDO)', background='#dcedc8', foreground=COLORS['success'])  
         
         self.tree_detalle.pack(side="left", fill="both", expand=True)
 
         self.tree_detalle.bind("<Motion>", self.verificar_tooltip)
         self.tree_detalle.bind("<Leave>", self.ocultar_tooltip)
 
-    # --- LÓGICA DE TOOLTIPS (Concepto Y Método) ---
+    # --- LÓGICA DE TOOLTIPS ---
     def verificar_tooltip(self, event):
         try:
             region = self.tree_detalle.identify("region", event.x, event.y)
@@ -490,7 +520,6 @@ class Aplicacion(tk.Tk):
 
         tk.Label(top, text="DNI / Código Único:", bg="white", font=FONTS['body_bold']).pack(anchor="w", padx=30)
         
-        # --- VALIDACIÓN DE SOLO NÚMEROS ---
         def validar_solo_numeros(text):
             return text.isdigit() or text == ""
         
@@ -538,7 +567,6 @@ class Aplicacion(tk.Tk):
         
         clientes = self.db.obtener_clientes_con_saldo(filtro)
         for cli in clientes:
-            # cli: 0:id, 1:dni, 2:nombre, 3:localidad, 4:saldo
             saldo = cli[4]
             if saldo < 0:
                 txt_saldo = f"+ ${abs(saldo):,.2f} (Favor)"
@@ -578,7 +606,7 @@ class Aplicacion(tk.Tk):
         elif filtro_actual == "Más Antiguas":
             historial.sort(key=lambda x: x[5] if x[5] else "", reverse=False)
         elif filtro_actual == "Por Estado":
-            peso_estado = {'PENDIENTE': 0, 'PARCIAL': 1, 'PAGADA': 2}
+            peso_estado = {'PENDIENTE': 0, 'PARCIAL': 1, 'PAGADA': 2, 'PAGADO (SALDO)': 2}
             historial.sort(key=lambda x: peso_estado.get(x[7], 99))
 
         for h in historial:
@@ -586,30 +614,24 @@ class Aplicacion(tk.Tk):
             f_pago = h[6] if h[6] else "-"
             metodo = h[8] if h[8] else "-"
             
-            # Formato visual para la columna "Resta" (Debe)
             resta_valor = h[4]
             if resta_valor < 0:
-                # Es saldo a favor (Negativo)
                 txt_resta = f"+ ${abs(resta_valor):,.2f} (Favor)"
             else:
-                # Es deuda
                 txt_resta = f"${resta_valor:,.2f}"
 
             valores_fila = (h[1], f"${h[2]:,.2f}", f"${h[3]:,.2f}", txt_resta, f_creacion, f_pago, h[7], metodo)
             self.tree_detalle.insert("", "end", values=valores_fila, tags=(h[7], h[0])) 
 
-        # --- LÓGICA DEL TOTAL GENERAL MEJORADA ---
+        # TOTAL GENERAL
         total = self.db.obtener_total_individual(self.cliente_seleccionado_id)
         
         if total > 0:
-            # El cliente DEBE plata
             self.lbl_cliente_total.config(text=f"TOTAL ADEUDADO: ${total:,.2f}", fg=COLORS['danger'])
         elif total < 0:
-            # El cliente tiene SALDO A FAVOR (Pagó de más)
             saldo_a_favor = abs(total)
             self.lbl_cliente_total.config(text=f"SALDO A FAVOR: ${saldo_a_favor:,.2f}", fg=COLORS['success'])
         else:
-            # Está en cero perfecto
             self.lbl_cliente_total.config(text="CUENTA AL DÍA ($0.00)", fg=COLORS['success'])
 
     def guardar_nueva_deuda(self):
@@ -648,7 +670,7 @@ class Aplicacion(tk.Tk):
             
             self.entry_monto.delete(0, tk.END)
             self.entry_desc.delete(0, tk.END)
-            self.entry_desc.insert(0, "Factura") # RESETEA A "Factura"
+            self.entry_desc.insert(0, "Factura")
             
             self.entry_dia.delete(0, tk.END)
             self.entry_mes.delete(0, tk.END)
@@ -670,12 +692,9 @@ class Aplicacion(tk.Tk):
         
         item = self.tree_detalle.item(seleccion)
         desc = item['values'][0]
-        # Limpieza del string de deuda para obtener float, quitando simbolos si los hay
         texto_debe = str(item['values'][3]) 
-        # Si tiene texto "(Favor)", es negativo. Si no, limpiamos $ y ,
+        
         if "Favor" in texto_debe:
-             # Si seleccionas un saldo a favor, no tiene sentido "pagarlo" en el sentido tradicional
-             # Pero permitimos abrir para visualizar, aunque seteamos val_falta para evitar error
              val_falta = 0.0
         else:
              try:
