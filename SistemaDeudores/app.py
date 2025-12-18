@@ -300,7 +300,7 @@ class BaseDeDatos:
         mes_actual = datetime.now().strftime("%Y-%m")
         patron = f"{mes_actual}%"
         
-        sql = "SELECT SUM(monto) FROM pagos_detalle WHERE fecha LIKE ?"
+        sql = "SELECT SUM(monto) FROM pagos_detalle WHERE fecha LIKE ? AND metodo != 'SALDO A FAVOR'"
         self.cursor.execute(sql, (patron,))
         res = self.cursor.fetchone()
         return res[0] if res and res[0] else 0.0
@@ -313,8 +313,8 @@ class BaseDeDatos:
         mes_actual = datetime.now().strftime("%Y-%m")
         patron = f"{mes_actual}%"
         
-        # Obtenemos TODOS los pagos del mes con su método y monto
-        sql = "SELECT metodo, monto FROM pagos_detalle WHERE fecha LIKE ?"
+        # Obtenemos TODOS los pagos del mes con su método y monto (Excluyendo Saldo a favor)
+        sql = "SELECT metodo, monto FROM pagos_detalle WHERE fecha LIKE ? AND metodo != 'SALDO A FAVOR'"
         self.cursor.execute(sql, (patron,))
         filas = self.cursor.fetchall()
         
@@ -343,6 +343,7 @@ class BaseDeDatos:
         sql = """
             SELECT substr(fecha, 1, 7) as mes, SUM(monto)
             FROM pagos_detalle
+            WHERE metodo != 'SALDO A FAVOR'
             GROUP BY substr(fecha, 1, 7)
             ORDER BY mes DESC
         """
