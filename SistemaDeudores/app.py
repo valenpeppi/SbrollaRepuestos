@@ -12,7 +12,7 @@ COLORS = {
     'primary': '#2980b9',       # Azul fuerte
     'secondary': '#2c3e50',     # Gris oscuro (Sidebar)
     'success': '#27ae60',       # Verde (Pagos/Guardar/Saldo a favor)
-    'warning': '#f39c12',       # Naranja (Agregar Deuda)
+    'warning': '#f39c12',       # Naranja (Botón Usar Saldo)
     'danger': '#c0392b',        # Rojo (Eliminar/Deuda)
     'light': '#ecf0f1',         # Gris muy claro (Fondos)
     'white': '#ffffff',
@@ -31,7 +31,9 @@ FONTS = {
     'small': ('Segoe UI', 8)
 }
 
-# --- PARTE 1: LA BASE DE DATOS ---
+# ==========================================
+# PARTE 1: LA BASE DE DATOS (LÓGICA MANUAL)
+# ==========================================
 class BaseDeDatos:
     def __init__(self, db_name="taller_repuestos_final.db"):
         self.conn = sqlite3.connect(db_name)
@@ -64,86 +66,7 @@ class BaseDeDatos:
         """)
         self.conn.commit()
 
-    def unificar_pagos(self, cliente_id):
-        """
-        Redistribuye el dinero del cliente.
-        Lógica corregida: Asigna 'SALDO' como método tanto si el pago es TOTAL
-        como si es PARCIAL, siempre que se esté usando dinero acumulado.
-        """
-        # 1. Traemos la info existente de todas las deudas del cliente
-        self.cursor.execute("""
-            SELECT id, monto_total, monto_pagado, fecha_pago, metodo_pago 
-            FROM deudas 
-            WHERE cliente_id = ? 
-            ORDER BY fecha_creacion ASC
-        """, (cliente_id,))
-        deudas = self.cursor.fetchall()
-        
-        if not deudas: return
-
-        # 2. Calcular la bolsa total de dinero pagado históricamente
-        total_pagado_historico = sum(d[2] for d in deudas)
-        dinero_disponible = total_pagado_historico
-        
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        # 3. Redistribuir el dinero disponible deuda por deuda
-        for i, (id_deuda, monto_total, pagado_antiguo, fecha_antigua, metodo_antiguo) in enumerate(deudas):
-            es_la_ultima = (i == len(deudas) - 1)
-            
-            # Valores iniciales (asumimos pendiente y mantenemos datos viejos si existen)
-            nuevo_estado = "PENDIENTE"
-            nueva_fecha = fecha_antigua
-            nuevo_metodo = metodo_antiguo 
-            
-            if dinero_disponible >= monto_total:
-                # --- CASO A: ALCANZA PARA PAGAR TODO ---
-                pago_a_asignar = monto_total
-                
-                # Si ya tenía un método manual (ej: Efectivo), lo respetamos.
-                # Si NO tenía método (o era vacío) y se paga ahora autom., es por SALDO.
-                if nuevo_metodo and nuevo_metodo not in ["", "-"]:
-                    nuevo_estado = "PAGADA"
-                else:
-                    nuevo_estado = "PAGADO (SALDO)"
-                    nuevo_metodo = "SALDO"
-
-                if not nueva_fecha: nueva_fecha = ahora
-                
-                # Caso especial: Sobra dinero en la última boleta (Saldo a favor futuro)
-                if es_la_ultima and (dinero_disponible > monto_total):
-                    pago_a_asignar = dinero_disponible
-                    # El estado sigue siendo pagado, el monto reflejará el exceso
-                    
-            else:
-                # --- CASO B: NO ALCANZA (PARCIAL O PENDIENTE) ---
-                pago_a_asignar = dinero_disponible
-                
-                if pago_a_asignar > 0:
-                    nuevo_estado = "PARCIAL"
-                    if not nueva_fecha: nueva_fecha = ahora
-                    
-                    # CORRECCIÓN IMPORTANTE:
-                    # Si es parcial y no tiene método asignado, ES SALDO.
-                    if not nuevo_metodo or nuevo_metodo in ["", "-"]:
-                        nuevo_metodo = "SALDO"
-                else:
-                    nuevo_estado = "PENDIENTE"
-                    nueva_fecha = None
-                    nuevo_metodo = None # Si vuelve a pendiente, limpiamos
-            
-            dinero_disponible -= pago_a_asignar
-            if dinero_disponible < 0: dinero_disponible = 0
-            
-            # Guardamos los cambios en la base de datos
-            self.cursor.execute("""
-                UPDATE deudas 
-                SET monto_pagado = ?, estado = ?, fecha_pago = ?, metodo_pago = ?
-                WHERE id = ?
-            """, (pago_a_asignar, nuevo_estado, nueva_fecha, nuevo_metodo, id_deuda))
-        
-        self.conn.commit()
-
+    # --- CLIENTES ---
     def existe_cliente(self, dni):
         self.cursor.execute("SELECT id FROM clientes WHERE dni = ?", (dni,))
         row = self.cursor.fetchone()
@@ -154,6 +77,7 @@ class BaseDeDatos:
                             (dni, nombre, "", localidad))
         self.conn.commit()
 
+    # --- DEUDAS Y PAGOS ---
     def agregar_deuda(self, cliente_id, monto, descripcion, fecha_manual=None):
         if fecha_manual:
             fecha_final = fecha_manual
@@ -165,31 +89,111 @@ class BaseDeDatos:
             VALUES (?, ?, 0, ?, 'PENDIENTE', ?)
         """, (cliente_id, monto, descripcion, fecha_final))
         self.conn.commit()
-        
-        # Ejecutar unificación para aplicar saldos a favor automáticamente
-        self.unificar_pagos(cliente_id)
 
-    def registrar_pago_parcial(self, deuda_id, nuevo_pago, metodo):
-        # 1. Registrar el dinero en la deuda seleccionada
-        self.cursor.execute("SELECT monto_pagado, cliente_id FROM deudas WHERE id = ?", (deuda_id,))
+    def registrar_pago(self, deuda_id, nuevo_pago, metodo):
+        """
+        Registra un pago en una deuda específica. 
+        Si se paga de más, el excedente queda en esa deuda como saldo a favor (negativo).
+        """
+        # 1. Obtener datos actuales
+        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_id,))
         res = self.cursor.fetchone()
         if not res: return
         
-        pagado_actual, cid = res
+        total, pagado_actual = res
         pagado_nuevo = pagado_actual + nuevo_pago
         
-        # Usamos la fecha actual para este pago específico
+        # Determinar estado
+        estado = "PENDIENTE"
+        # Usamos round para evitar problemas de decimales (ej: 0.0000001)
+        if round(pagado_nuevo, 2) >= round(total, 2):
+            estado = "PAGADA"
+        elif pagado_nuevo > 0:
+            estado = "PARCIAL"
+            
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
         
         self.cursor.execute("""
-            UPDATE deudas SET monto_pagado = ?, metodo_pago = ?, fecha_pago = ? 
+            UPDATE deudas SET monto_pagado = ?, metodo_pago = ?, fecha_pago = ?, estado = ?
             WHERE id = ?
-        """, (pagado_nuevo, metodo, ahora, deuda_id))
+        """, (pagado_nuevo, metodo, ahora, estado, deuda_id))
         self.conn.commit()
-        
-        # 2. Reordenar toda la cuenta corriente para asegurar consistencia
-        self.unificar_pagos(cid)
 
+    # --- LÓGICA DE SALDOS A FAVOR (MANUAL) ---
+    def obtener_saldo_a_favor_disponible(self, cliente_id):
+        """
+        Suma todo el dinero que sobra de las boletas pagadas en exceso.
+        Retorna un número positivo (la cantidad disponible).
+        """
+        self.cursor.execute("""
+            SELECT SUM(monto_pagado - monto_total) 
+            FROM deudas 
+            WHERE cliente_id = ? AND monto_pagado > monto_total
+        """, (cliente_id,))
+        res = self.cursor.fetchone()
+        return res[0] if res and res[0] else 0.0
+
+    def usar_saldo_manual(self, cliente_id, deuda_destino_id):
+        """
+        Saca dinero de las boletas donde sobra y lo pone en la deuda_destino_id.
+        """
+        # 1. ¿Cuánto necesitamos para pagar la deuda destino?
+        self.cursor.execute("SELECT monto_total, monto_pagado FROM deudas WHERE id = ?", (deuda_destino_id,))
+        res = self.cursor.fetchone()
+        if not res: return False
+        
+        total_dest, pagado_dest = res
+        falta_pagar = total_dest - pagado_dest
+        
+        if falta_pagar <= 0: return False # Ya está pagada o tiene saldo a favor
+
+        # 2. Buscar boletas QUE TENGAN SOBRANTE (Donde sacamos la plata)
+        self.cursor.execute("""
+            SELECT id, monto_total, monto_pagado 
+            FROM deudas 
+            WHERE cliente_id = ? AND monto_pagado > monto_total
+            ORDER BY fecha_creacion ASC
+        """, (cliente_id,))
+        fuentes_de_saldo = self.cursor.fetchall()
+        
+        if not fuentes_de_saldo: return False
+
+        dinero_necesario = falta_pagar
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        for fuente in fuentes_de_saldo:
+            if dinero_necesario <= 0: break
+            
+            id_f, total_f, pagado_f = fuente
+            disponible_en_esta = pagado_f - total_f # El sobrante
+            
+            # Cuánto sacamos de esta boleta
+            a_tomar = min(dinero_necesario, disponible_en_esta)
+            
+            # A. RESTAR de la boleta fuente (Quitamos el sobrante)
+            nuevo_pagado_f = pagado_f - a_tomar
+            # El estado de la fuente sigue siendo PAGADA, solo que con menos saldo a favor
+            self.cursor.execute("UPDATE deudas SET monto_pagado = ? WHERE id = ?", (nuevo_pagado_f, id_f))
+            
+            # B. SUMAR a la deuda destino
+            pagado_dest += a_tomar
+            dinero_necesario -= a_tomar
+            
+        # 3. Actualizar la deuda destino final
+        estado_dest = "PARCIAL"
+        if round(pagado_dest, 2) >= round(total_dest, 2):
+            estado_dest = "PAGADA"
+            
+        self.cursor.execute("""
+            UPDATE deudas 
+            SET monto_pagado = ?, estado = ?, fecha_pago = ?, metodo_pago = 'SALDO A FAVOR'
+            WHERE id = ?
+        """, (pagado_dest, estado_dest, ahora, deuda_destino_id))
+        
+        self.conn.commit()
+        return True
+
+    # --- CONSULTAS DE VISUALIZACIÓN ---
     def obtener_clientes_con_saldo(self, filtro=""):
         query = """
             SELECT c.id, c.dni, c.nombre, c.localidad, 
@@ -205,6 +209,7 @@ class BaseDeDatos:
         return self.cursor.fetchall()
 
     def obtener_historial_cliente(self, cliente_id):
+        # Indices: 0:id, 1:desc, 2:total, 3:pagado, 4:resta, 5:fecha_creacion, 6:fecha_pago, 7:estado, 8:metodo
         query = """
             SELECT id, descripcion, monto_total, monto_pagado, 
                    (monto_total - monto_pagado) as resta, 
@@ -225,16 +230,12 @@ class BaseDeDatos:
         return resultado[0] if resultado else 0
 
     def borrar_deuda_permanentemente(self, deuda_id):
-        self.cursor.execute("SELECT cliente_id FROM deudas WHERE id = ?", (deuda_id,))
-        row = self.cursor.fetchone()
-        
         self.cursor.execute("DELETE FROM deudas WHERE id = ?", (deuda_id,))
         self.conn.commit()
-        
-        if row:
-            self.unificar_pagos(row[0])
 
-# --- PARTE 2: INTERFAZ GRÁFICA MEJORADA ---
+# ==========================================
+# PARTE 2: INTERFAZ GRÁFICA MEJORADA
+# ==========================================
 class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -243,6 +244,7 @@ class Aplicacion(tk.Tk):
         self.geometry("1350x780")
         self.configure(bg=COLORS['light'])
         
+        # Lógica de rutas para logo en .exe
         if getattr(sys, 'frozen', False):
             self.carpeta_base = os.path.dirname(sys.executable)
         else:
@@ -256,10 +258,12 @@ class Aplicacion(tk.Tk):
         
         self.cliente_seleccionado_id = None
         
+        # Variables para Tooltip
         self.tooltip_window = None
         self.last_tooltip_row = None
         self.last_tooltip_col = None 
 
+        # --- ESTILOS TTK ---
         self.style = ttk.Style()
         self.style.theme_use("clam")
         
@@ -277,6 +281,7 @@ class Aplicacion(tk.Tk):
         
         self.style.map('Treeview', background=[('selected', COLORS['primary'])])
 
+        # Layout Principal
         panel_izquierdo = tk.Frame(self, width=380, bg=COLORS['secondary'])
         panel_izquierdo.pack(side="left", fill="both", expand=False)
         
@@ -322,7 +327,7 @@ class Aplicacion(tk.Tk):
         self.tree_clientes.heading("DNI", text="DNI / ID")
         self.tree_clientes.heading("Nombre", text="Nombre")
         self.tree_clientes.heading("Loc", text="Loc")
-        self.tree_clientes.heading("Saldo", text="Estado ($)")
+        self.tree_clientes.heading("Saldo", text="Total ($)")
         
         self.tree_clientes.column("DNI", width=70)
         self.tree_clientes.column("Nombre", width=130)
@@ -342,6 +347,15 @@ class Aplicacion(tk.Tk):
                                  padx=15, pady=8,
                                  command=self.eliminar_error)
         btn_eliminar.pack(side="left") 
+
+        # --- BOTÓN NUEVO: USAR SALDO ---
+        self.btn_usar_saldo = tk.Button(frame_acciones, text="🔄 USAR SALDO A FAVOR", 
+                                        bg=COLORS['warning'], fg="white", 
+                                        font=FONTS['body_bold'], relief="flat", cursor="hand2",
+                                        padx=15, pady=8,
+                                        command=self.click_usar_saldo)
+        self.btn_usar_saldo.pack(side="left", padx=20)
+        self.btn_usar_saldo.config(state="disabled") # Desactivado por defecto
 
         btn_pagar = tk.Button(frame_acciones, text="💵  INGRESAR PAGO", 
                               bg=COLORS['success'], fg="white", 
@@ -372,9 +386,17 @@ class Aplicacion(tk.Tk):
                                            padx=20, pady=10)      
         self.lbl_cliente_nombre.pack(side="left", expand=True, fill="x")
 
-        self.lbl_cliente_total = tk.Label(parent, text="", font=('Segoe UI', 24, 'bold'), fg=COLORS['danger'], bg=COLORS['light'])
-        self.lbl_cliente_total.pack(side="top", pady=5)
+        # --- ETIQUETAS DE TOTALES ---
+        frame_totales = tk.Frame(parent, bg=COLORS['light'])
+        frame_totales.pack(side="top", pady=5)
+        
+        self.lbl_cliente_total = tk.Label(frame_totales, text="", font=('Segoe UI', 24, 'bold'), fg=COLORS['danger'], bg=COLORS['light'])
+        self.lbl_cliente_total.pack(anchor="center")
+        
+        self.lbl_saldo_disponible = tk.Label(frame_totales, text="", font=('Segoe UI', 14, 'bold'), fg=COLORS['success'], bg=COLORS['light'])
+        self.lbl_saldo_disponible.pack(anchor="center")
 
+        # --- FORMULARIO NUEVA DEUDA ---
         frame_title_add = tk.Frame(parent, bg=COLORS['light'])
         frame_title_add.pack(side="top", fill="x", padx=30, pady=(15, 0))
         tk.Label(frame_title_add, text="Agendar nueva deuda", font=FONTS['h2'], bg=COLORS['light'], fg=COLORS['text']).pack(side="left")
@@ -421,6 +443,7 @@ class Aplicacion(tk.Tk):
                                   command=self.guardar_nueva_deuda)
         btn_add_deuda.grid(row=0, column=7, padx=10, sticky="e")
         
+        # --- TABLA HISTORIAL ---
         frame_head = tk.Frame(parent, bg=COLORS['light'])
         frame_head.pack(side="top", fill="x", padx=30, pady=(20, 5))
         
@@ -443,7 +466,7 @@ class Aplicacion(tk.Tk):
         scrollbar_d.config(command=self.tree_detalle.yview)
 
         headers = ["Concepto", "Original ($)", "Pagado ($)", "Debe ($)", "Fecha Creación", "Fecha Pago", "Estado", "Método"]
-        widths = [200, 80, 80, 80, 100, 100, 100, 100] # Ancho ajustado
+        widths = [200, 80, 80, 80, 100, 100, 80, 100] # Ancho ajustado
         
         for i, col in enumerate(cols_d):
             self.tree_detalle.heading(col, text=headers[i])
@@ -451,18 +474,16 @@ class Aplicacion(tk.Tk):
         
         self.tree_detalle.column("Desc", anchor="w") 
 
-        # --- COLORES DE LOS ESTADOS ---
         self.tree_detalle.tag_configure('PENDIENTE', background='#ffebee', foreground=COLORS['danger']) 
         self.tree_detalle.tag_configure('PARCIAL', background='#fff3e0', foreground=COLORS['text'])    
         self.tree_detalle.tag_configure('PAGADA', background='#e8f5e9', foreground=COLORS['success'])
-        self.tree_detalle.tag_configure('PAGADO (SALDO)', background='#dcedc8', foreground=COLORS['success'])  
         
         self.tree_detalle.pack(side="left", fill="both", expand=True)
 
         self.tree_detalle.bind("<Motion>", self.verificar_tooltip)
         self.tree_detalle.bind("<Leave>", self.ocultar_tooltip)
 
-    # --- LÓGICA DE TOOLTIPS ---
+    # --- LÓGICA DE TOOLTIPS (Concepto Y Método) ---
     def verificar_tooltip(self, event):
         try:
             region = self.tree_detalle.identify("region", event.x, event.y)
@@ -623,16 +644,24 @@ class Aplicacion(tk.Tk):
             valores_fila = (h[1], f"${h[2]:,.2f}", f"${h[3]:,.2f}", txt_resta, f_creacion, f_pago, h[7], metodo)
             self.tree_detalle.insert("", "end", values=valores_fila, tags=(h[7], h[0])) 
 
-        # TOTAL GENERAL
+        # TOTAL GENERAL Y SALDO A FAVOR
         total = self.db.obtener_total_individual(self.cliente_seleccionado_id)
+        saldo_favor = self.db.obtener_saldo_a_favor_disponible(self.cliente_seleccionado_id)
         
         if total > 0:
             self.lbl_cliente_total.config(text=f"TOTAL ADEUDADO: ${total:,.2f}", fg=COLORS['danger'])
         elif total < 0:
-            saldo_a_favor = abs(total)
-            self.lbl_cliente_total.config(text=f"SALDO A FAVOR: ${saldo_a_favor:,.2f}", fg=COLORS['success'])
+            self.lbl_cliente_total.config(text=f"SALDO NETO: +${abs(total):,.2f}", fg=COLORS['success'])
         else:
             self.lbl_cliente_total.config(text="CUENTA AL DÍA ($0.00)", fg=COLORS['success'])
+
+        # GESTIÓN DEL BOTÓN "USAR SALDO"
+        if saldo_favor > 0:
+            self.lbl_saldo_disponible.config(text=f"HAY SALDO A FAVOR DISPONIBLE: ${saldo_favor:,.2f}")
+            self.btn_usar_saldo.config(state="normal", bg=COLORS['warning'])
+        else:
+            self.lbl_saldo_disponible.config(text="")
+            self.btn_usar_saldo.config(state="disabled", bg="gray")
 
     def guardar_nueva_deuda(self):
         if not self.cliente_seleccionado_id:
@@ -722,8 +751,8 @@ class Aplicacion(tk.Tk):
             except: pass 
 
         if val_falta <= 0 and "Favor" not in texto_debe:
-            messagebox.showinfo("Bien", "Esta deuda ya está pagada.")
-            return
+            messagebox.showinfo("Bien", "Esta deuda ya está pagada o tiene saldo a favor.")
+            # Permitimos abrir igual por si quiere agregar más saldo a favor, pero avisamos.
 
         popup = tk.Toplevel(self)
         popup.title("Ingresar Pago")
@@ -793,7 +822,7 @@ class Aplicacion(tk.Tk):
                 if obs:
                     metodo_final += f" ({obs})"
 
-                self.db.registrar_pago_parcial(deuda_id, monto, metodo_final)
+                self.db.registrar_pago(deuda_id, monto, metodo_final)
                 self.actualizar_info_completa()
                 self.cargar_lista_clientes(self.entry_buscar.get())
                 popup.destroy()
@@ -807,6 +836,32 @@ class Aplicacion(tk.Tk):
                   command=confirmar, cursor="hand2").pack(fill="x", padx=30, pady=10, ipady=10)
         
         popup.bind('<Return>', lambda e: confirmar())
+
+    def click_usar_saldo(self):
+        """Lógica para el botón USAR SALDO A FAVOR"""
+        seleccion = self.tree_detalle.selection()
+        if not seleccion:
+            messagebox.showinfo("Atención", "Selecciona a qué deuda (ROJA/PENDIENTE) quieres aplicarle el saldo.")
+            return
+        
+        deuda_id = self.tree_detalle.item(seleccion, "tags")[1]
+        item = self.tree_detalle.item(seleccion)
+        estado = item['values'][6] # Columna Estado
+        
+        if estado == "PAGADA" or "Favor" in str(item['values'][3]):
+            messagebox.showinfo("Error", "Esa deuda ya está pagada o tiene saldo a favor. Elige una Pendiente.")
+            return
+        
+        descripcion = item['values'][0]
+        
+        if messagebox.askyesno("Usar Saldo", f"¿Usar el saldo a favor disponible para pagar '{descripcion}'?"):
+            exito = self.db.usar_saldo_manual(self.cliente_seleccionado_id, deuda_id)
+            if exito:
+                messagebox.showinfo("Éxito", "Saldo aplicado correctamente.")
+                self.actualizar_info_completa()
+                self.cargar_lista_clientes(self.entry_buscar.get())
+            else:
+                messagebox.showerror("Error", "No se pudo aplicar (quizás no alcanza el saldo disponible).")
 
     def eliminar_error(self):
         seleccion = self.tree_detalle.selection()
